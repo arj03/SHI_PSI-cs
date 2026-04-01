@@ -16,7 +16,7 @@ public record ProcessBlindedSetResponse(string[] OrderedDoubleBlinded, string[] 
 public record ProcessResponseResult(string[] OrderedDoubleBlinded, string[] DoubleBlinded, ProofMsg Proof);
 
 // ================================================================
-// SHI-PSI Session (Ed25519-based)
+// SHI-PSI Session (Ristretto255 via libsodium)
 // ================================================================
 
 public class PsiSession
@@ -28,15 +28,15 @@ public class PsiSession
     private readonly string[] _realElements;
     private readonly BigInteger _key;
     private readonly string[] _paddedElements;
-    private readonly (BigInteger X, BigInteger Y)[] _blindedPoints;
+    private readonly byte[][] _blindedPoints;
     private readonly BigInteger _commitNonce;
-    private readonly (BigInteger X, BigInteger Y) _myCommitment;
+    private readonly byte[] _myCommitment;
     private readonly Dictionary<string, string> _myBlindedMap = new();
 
-    private (BigInteger X, BigInteger Y)? _theirCommitment;
-    private (BigInteger X, BigInteger Y)[]? _theirBlinded;
-    private (BigInteger X, BigInteger Y)[]? _myDoubleBlinded;
-    private (BigInteger X, BigInteger Y)[]? _theirDoubleBlinded;
+    private byte[]? _theirCommitment;
+    private byte[][]? _theirBlinded;
+    private byte[][]? _myDoubleBlinded;
+    private byte[][]? _theirDoubleBlinded;
 
     public PsiSession(string[] myElements, int n = DefaultN)
     {
@@ -56,12 +56,12 @@ public class PsiSession
         }
         _paddedElements = padded.ToArray();
 
-        var blindedList = new (BigInteger X, BigInteger Y)[n];
+        var blindedList = new byte[n][];
         for (int i = 0; i < n; i++)
         {
-            var bp = Ed25519.ScalarMul(CryptoUtil.HashToGroup(padded[i]), _key);
+            var bp = Ristretto255.ScalarMul(Ristretto255.HashToPoint(padded[i]), _key);
             blindedList[i] = bp;
-            _myBlindedMap[Ed25519.PointToHex(bp)] = padded[i];
+            _myBlindedMap[Ristretto255.PointToHex(bp)] = padded[i];
         }
         _blindedPoints = CryptoUtil.SecureShuffle(blindedList);
 
@@ -69,54 +69,54 @@ public class PsiSession
         _myCommitment = CryptoUtil.Commit(_blindedPoints, _commitNonce);
     }
 
-    public CommitmentMsg Commitment() => new(Ed25519.PointToHex(_myCommitment));
+    public CommitmentMsg Commitment() => new(Ristretto255.PointToHex(_myCommitment));
 
     public void ReceiveCommitment(CommitmentMsg msg)
     {
-        _theirCommitment = ParsePoint(msg.Commitment);
+        _theirCommitment = Ristretto255.HexToPoint(msg.Commitment);
     }
 
     public BlindedSetMsg BlindedSet() => new(
-        _blindedPoints.Select(Ed25519.PointToHex).ToArray(),
+        _blindedPoints.Select(Ristretto255.PointToHex).ToArray(),
         CryptoUtil.BigIntToHex(_commitNonce));
 
     public ProcessBlindedSetResponse ProcessBlindedSet(BlindedSetMsg msg)
     {
-        var theirPoints = msg.Points.Select(ParsePoint).ToArray();
+        var theirPoints = msg.Points.Select(Ristretto255.HexToPoint).ToArray();
         var theirNonce = CryptoUtil.HexToBigInt(msg.Nonce);
 
-        if (!CryptoUtil.VerifyCommit(theirPoints, theirNonce, _theirCommitment!.Value))
+        if (!CryptoUtil.VerifyCommit(theirPoints, theirNonce, _theirCommitment!))
             throw new InvalidOperationException("Commitment verification failed");
         if (theirPoints.Length != _n)
             throw new InvalidOperationException($"Expected {_n} points, got {theirPoints.Length}");
 
         _theirBlinded = theirPoints;
 
-        var doubled = theirPoints.Select(p => Ed25519.ScalarMul(p, _key)).ToArray();
+        var doubled = theirPoints.Select(p => Ristretto255.ScalarMul(p, _key)).ToArray();
         var proof = ChaumPedersen.Prove(theirPoints, doubled, _key);
         var shuffled = CryptoUtil.SecureShuffle(doubled);
         _theirDoubleBlinded = shuffled;
 
         return new ProcessBlindedSetResponse(
-            doubled.Select(Ed25519.PointToHex).ToArray(),
-            shuffled.Select(Ed25519.PointToHex).ToArray(),
+            doubled.Select(Ristretto255.PointToHex).ToArray(),
+            shuffled.Select(Ristretto255.PointToHex).ToArray(),
             new ProofMsg(CryptoUtil.BigIntToHex(proof.C), CryptoUtil.BigIntToHex(proof.S)),
-            _blindedPoints.Select(Ed25519.PointToHex).ToArray(),
+            _blindedPoints.Select(Ristretto255.PointToHex).ToArray(),
             CryptoUtil.BigIntToHex(_commitNonce));
     }
 
     public ProcessResponseResult ProcessResponse(ProcessBlindedSetResponse msg)
     {
-        var theirPoints = msg.MyPoints.Select(ParsePoint).ToArray();
+        var theirPoints = msg.MyPoints.Select(Ristretto255.HexToPoint).ToArray();
         var theirNonce = CryptoUtil.HexToBigInt(msg.MyNonce);
 
-        if (!CryptoUtil.VerifyCommit(theirPoints, theirNonce, _theirCommitment!.Value))
+        if (!CryptoUtil.VerifyCommit(theirPoints, theirNonce, _theirCommitment!))
             throw new InvalidOperationException("Commitment verification failed");
         if (theirPoints.Length != _n)
             throw new InvalidOperationException($"Expected {_n} points, got {theirPoints.Length}");
 
-        var orderedDoubled = msg.OrderedDoubleBlinded.Select(ParsePoint).ToArray();
-        var shuffledDoubled = msg.DoubleBlinded.Select(ParsePoint).ToArray();
+        var orderedDoubled = msg.OrderedDoubleBlinded.Select(Ristretto255.HexToPoint).ToArray();
+        var shuffledDoubled = msg.DoubleBlinded.Select(Ristretto255.HexToPoint).ToArray();
         var proof = new CpProof(CryptoUtil.HexToBigInt(msg.Proof.C), CryptoUtil.HexToBigInt(msg.Proof.S));
 
         if (orderedDoubled.Length != _n || shuffledDoubled.Length != _n)
@@ -129,21 +129,21 @@ public class PsiSession
         _theirBlinded = theirPoints;
         _myDoubleBlinded = orderedDoubled;
 
-        var theirDoubled = theirPoints.Select(p => Ed25519.ScalarMul(p, _key)).ToArray();
+        var theirDoubled = theirPoints.Select(p => Ristretto255.ScalarMul(p, _key)).ToArray();
         var myProof = ChaumPedersen.Prove(theirPoints, theirDoubled, _key);
         var myShuffled = CryptoUtil.SecureShuffle(theirDoubled);
         _theirDoubleBlinded = myShuffled;
 
         return new ProcessResponseResult(
-            theirDoubled.Select(Ed25519.PointToHex).ToArray(),
-            myShuffled.Select(Ed25519.PointToHex).ToArray(),
+            theirDoubled.Select(Ristretto255.PointToHex).ToArray(),
+            myShuffled.Select(Ristretto255.PointToHex).ToArray(),
             new ProofMsg(CryptoUtil.BigIntToHex(myProof.C), CryptoUtil.BigIntToHex(myProof.S)));
     }
 
     public void ProcessFinal(ProcessResponseResult msg)
     {
-        var orderedDoubled = msg.OrderedDoubleBlinded.Select(ParsePoint).ToArray();
-        var shuffledDoubled = msg.DoubleBlinded.Select(ParsePoint).ToArray();
+        var orderedDoubled = msg.OrderedDoubleBlinded.Select(Ristretto255.HexToPoint).ToArray();
+        var shuffledDoubled = msg.DoubleBlinded.Select(Ristretto255.HexToPoint).ToArray();
         var proof = new CpProof(CryptoUtil.HexToBigInt(msg.Proof.C), CryptoUtil.HexToBigInt(msg.Proof.S));
 
         if (orderedDoubled.Length != _n || shuffledDoubled.Length != _n)
@@ -161,17 +161,17 @@ public class PsiSession
         if (_myDoubleBlinded == null || _theirDoubleBlinded == null)
             throw new InvalidOperationException("Protocol not complete");
 
-        var mySet = new HashSet<string>(_myDoubleBlinded.Select(Ed25519.PointToHex));
-        var theirHexes = _theirDoubleBlinded.Select(Ed25519.PointToHex).ToArray();
+        var mySet = new HashSet<string>(_myDoubleBlinded.Select(Ristretto255.PointToHex));
+        var theirHexes = _theirDoubleBlinded.Select(Ristretto255.PointToHex).ToArray();
         var matchingHexes = new HashSet<string>(theirHexes.Where(h => mySet.Contains(h)));
 
         var result = new List<string>();
         for (int i = 0; i < _blindedPoints.Length; i++)
         {
-            var dbHex = Ed25519.PointToHex(_myDoubleBlinded[i]);
+            var dbHex = Ristretto255.PointToHex(_myDoubleBlinded[i]);
             if (matchingHexes.Contains(dbHex))
             {
-                var bpHex = Ed25519.PointToHex(_blindedPoints[i]);
+                var bpHex = Ristretto255.PointToHex(_blindedPoints[i]);
                 if (_myBlindedMap.TryGetValue(bpHex, out var element) && !element.StartsWith(DummyTag))
                     result.Add(element);
             }
@@ -195,13 +195,6 @@ public class PsiSession
         bob.ProcessFinal(msgA2);
 
         return (alice.Intersection(), bob.Intersection());
-    }
-
-    private static (BigInteger X, BigInteger Y) ParsePoint(string hex)
-    {
-        var x = CryptoUtil.HexToBigInt(hex[..64]);
-        var y = CryptoUtil.HexToBigInt(hex[64..]);
-        return (x, y);
     }
 
     private static string ToBase36(BigInteger n)

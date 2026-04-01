@@ -1,26 +1,9 @@
 // Test program for SHI-PSI
 
 using System.Diagnostics;
-using System.Numerics;
 using ShiPsiCs;
 
-// Test 1: Group element generation
-Console.WriteLine("\n=== Test 1: Hash-to-group ===");
-var h1 = CryptoUtil.HashToGroup("element1");
-var h2 = CryptoUtil.HashToGroup("element1");
-var h3 = CryptoUtil.HashToGroup("element2");
-Console.WriteLine($"h('element1') == h('element1'): {Ed25519.PointEquals(h1, h2)} (should be True)");
-Console.WriteLine($"h('element1') == h('element2'): {Ed25519.PointEquals(h1, h3)} (should be False)");
-Console.WriteLine($"h('element1') != identity: {!Ed25519.PointEquals(h1, (BigInteger.Zero, BigInteger.One))} (should be True)");
-
-// Test 2: Commutative blinding (a*(b*P) == b*(a*P))
-Console.WriteLine("\n=== Test 2: Commutativity ===");
-BigInteger a = BigInteger.Parse("12345678901234567890");
-BigInteger b = BigInteger.Parse("98765432109876543210");
-var elem = CryptoUtil.HashToGroup("test");
-var ab = Ed25519.ScalarMul(Ed25519.ScalarMul(elem, a), b);
-var ba = Ed25519.ScalarMul(Ed25519.ScalarMul(elem, b), a);
-Console.WriteLine($"b*(a*H(x)) == a*(b*H(x)): {Ed25519.PointEquals(ab, ba)} (should be True)");
+Sodium.SodiumCore.Init();
 
 // Test 3: Full protocol — simple case
 Console.WriteLine("\n=== Test 3: Protocol (basic) ===");

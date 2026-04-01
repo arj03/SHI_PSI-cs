@@ -311,7 +311,7 @@ Capping N alone is insufficient if the protocol can be executed without restrict
 | **Total per party** | — | **~1.2 ms** |
 | **Total communication** | — | **~2.8 KB** |
 
-These estimates assume a modern x86_64 processor with constant-time scalar multiplication. At N = 10, the protocol is effectively instantaneous and imposes negligible network overhead.
+These estimates assume a native constant-time scalar multiplication library (e.g., libsodium) on a modern x86_64 processor. The C# PoC uses libsodium via P/Invoke for all EC operations and measures approximately 60 ms per full two-party run (see Section 7.4), with the remaining overhead coming from `BigInteger` scalar arithmetic in proof weight derivation rather than EC operations. With fully optimised scalar arithmetic, the protocol would approach the sub-millisecond estimate above.
 
 ### 7.2 Security Considerations for Implementers
 
@@ -371,10 +371,9 @@ This repository includes a C# proof-of-concept (`ShiPsi.cs`) targeting .NET 9.0 
 
 | Aspect | Specification (Sections 3–4) | C# PoC |
 |--------|------------------------------|--------|
-| Group | Ristretto255 (prime-order abstraction over Curve25519) | Ed25519 twisted Edwards curve with cofactor clearing (×8) |
 | Shuffle proofs | Verifiable shuffle with ZK proof (Section 3.5) | Multiset hash check: membership and bijection proven, permutation not hidden (not ZK) |
-| Constant-time operations | Required (Section 7.2) | Not constant-time; `BigInteger` arithmetic branches on values (see Section 7.3) |
-| Field arithmetic | Native library (e.g., libsodium) | `BigInteger` with extended projective coordinates (X:Y:Z:T) to minimize field inversions |
+| Constant-time operations | Required (Section 7.2) | EC operations are constant-time via libsodium; scalar arithmetic in proof weight derivation uses `BigInteger` and is not constant-time (see Section 7.3) |
+| Field arithmetic | Native library (e.g., libsodium) | libsodium Ristretto255 via P/Invoke (`Sodium.Core` NuGet) |
 
 **Shuffle proof approach:** The implementation uses a multiset hash check rather than one-out-of-N membership proofs or the full Bayer-Groth ZK shuffle. All three are partial or full replacements for the spec's verifiable shuffle:
 
@@ -399,10 +398,10 @@ The check evaluates the characteristic polynomial of both sets at a Fiat-Shamir 
 
 | Metric | Value |
 |--------|-------|
-| Full protocol (two parties, local) | ~320 ms |
-| Communication (serialized hex) | ~26 KB (hex-encoded; ~2.6 KB if binary) |
+| Full protocol (two parties, local) | ~60 ms |
+| Communication (serialized hex) | ~14 KB (hex-encoded; ~1.4 KB if binary) |
 
-**To harden for production:** replace `BigInteger` EC math with libsodium P/Invoke bindings (`Sodium.Core` NuGet) for constant-time Ristretto255 operations, and add verifiable shuffle proofs.
+**To harden for production:** replace the scalar arithmetic in `ChaumPedersen` weight derivation (currently `BigInteger` mod-L operations) with constant-time equivalents, and add verifiable shuffle proofs (Bayer-Groth) to achieve full ZK on the permutation.
 
 ---
 
