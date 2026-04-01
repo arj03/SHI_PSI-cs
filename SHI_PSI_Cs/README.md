@@ -365,7 +365,7 @@ This replaces the entire `Ed25519` and `CryptoUtil` field arithmetic layer while
 
 ### 7.4 C# Proof-of-Concept Implementation
 
-This repository includes a C# proof-of-concept (`ShiPsi.cs`) targeting .NET 9.0 that implements the full protocol. The implementation uses standard .NET libraries (`System.Security.Cryptography.SHA256`, `System.Security.Cryptography.RandomNumberGenerator`, `System.Numerics.BigInteger`) with no external dependencies.
+This repository includes a C# proof-of-concept (`ShiPsi.cs`) targeting .NET 9.0 that implements the full protocol. EC operations use libsodium via P/Invoke (`Sodium.Core` NuGet); scalar arithmetic uses `System.Numerics.BigInteger` from the standard library.
 
 **Differences from the specification:**
 
@@ -373,7 +373,6 @@ This repository includes a C# proof-of-concept (`ShiPsi.cs`) targeting .NET 9.0 
 |--------|------------------------------|--------|
 | Shuffle proofs | Verifiable shuffle with ZK proof (Section 3.5) | Multiset hash check: membership and bijection proven, permutation not hidden (not ZK) |
 | Constant-time operations | Required (Section 7.2) | EC operations are constant-time via libsodium; scalar arithmetic in proof weight derivation uses `BigInteger` and is not constant-time (see Section 7.3) |
-| Field arithmetic | Native library (e.g., libsodium) | libsodium Ristretto255 via P/Invoke (`Sodium.Core` NuGet) |
 
 **Shuffle proof approach:** The implementation uses a multiset hash check rather than one-out-of-N membership proofs or the full Bayer-Groth ZK shuffle. All three are partial or full replacements for the spec's verifiable shuffle:
 
@@ -389,9 +388,9 @@ The check evaluates the characteristic polynomial of both sets at a Fiat-Shamir 
 
 **Architecture:**
 
-- `Ed25519` — Curve arithmetic using extended projective coordinates (HWCD 2008 formulas). Points are represented as `(X:Y:Z:T)` internally, converted to affine `(x, y)` only for hashing and serialization.
-- `CryptoUtil` — SHA-256 hashing, hash-to-group, random scalar generation, commitments, and secure shuffle.
-- `ChaumPedersen` — Batched Chaum-Pedersen proof of consistent scalar multiplication. Derives deterministic weights via Fiat-Shamir and computes weighted point sums in projective coordinates.
+- `Ristretto255` — P/Invoke wrappers around libsodium: `ScalarMul`, `PointAdd`, `HashToPoint` (SHA-512 → `crypto_core_ristretto255_from_hash`), and encoding helpers. Points are 32-byte compressed Ristretto255 encodings.
+- `CryptoUtil` — SHA-256 hashing, hash-to-group, random scalar generation, Pedersen commitments, multiset shuffle verification, and secure shuffle.
+- `ChaumPedersen` — Batched Chaum-Pedersen proof of consistent scalar multiplication. Derives deterministic weights via Fiat-Shamir; EC operations go through `Ristretto255`, scalar arithmetic uses `BigInteger`.
 - `PsiSession` — Full protocol state machine. Exposes `Commitment()`, `BlindedSet()`, `ProcessBlindedSet()`, `ProcessResponse()`, `ProcessFinal()`, and `Intersection()` matching the phases in Section 4.
 
 **Performance (N = 10, measured on desktop hardware):**
