@@ -331,7 +331,6 @@ This repository includes a C# proof-of-concept (`ShiPsi.cs`) targeting .NET 9.0 
 | Aspect | Specification (Sections 3–4) | C# PoC |
 |--------|------------------------------|--------|
 | Shuffle proofs | Verifiable shuffle with ZK proof (Section 3.5) | Multiset hash check: membership and bijection proven, permutation not hidden (not ZK) |
-| Constant-time operations | Required (Section 7.2) | All EC and scalar operations are constant-time via libsodium (`crypto_scalarmult_ristretto255`, `crypto_core_ristretto255_scalar_*`) |
 
 **Shuffle proof approach:** The implementation uses a multiset hash check rather than one-out-of-N membership proofs or the full Bayer-Groth ZK shuffle. All three are partial or full replacements for the spec's verifiable shuffle:
 
