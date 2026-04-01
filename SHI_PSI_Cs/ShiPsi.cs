@@ -1,7 +1,6 @@
 // ShiPsi.cs — Size-Hiding Private Set Intersection Protocol
-// WARNING: Prototype — not constant-time. Do not use for production without hardening.
+// WARNING: Prototype. Do not use for production without hardening.
 
-using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -10,18 +9,16 @@ namespace ShiPsiCs;
 
 // ================================================================
 // Ristretto255 via libsodium P/Invoke
-// Points are 32-byte compressed Ristretto255 encodings.
-// Scalars are BigIntegers reduced mod L (the group order).
+// Points:  32-byte compressed Ristretto255 encodings.
+// Scalars: 32-byte little-endian integers mod L.
 // ================================================================
 
 public static class Ristretto255
 {
-    public const int PointBytes = 32;
+    public const int PointBytes  = 32;
     public const int ScalarBytes = 32;
 
-    // Group order (prime subgroup, same as Ed25519)
-    public static readonly BigInteger L =
-        BigInteger.Parse("7237005577332262213973186563042994240857116359379907606001950938285454250989");
+    // ── EC operations ────────────────────────────────────────────
 
     [DllImport("libsodium", CallingConvention = CallingConvention.Cdecl)]
     private static extern int crypto_scalarmult_ristretto255(byte[] q, byte[] n, byte[] p);
@@ -32,10 +29,26 @@ public static class Ristretto255
     [DllImport("libsodium", CallingConvention = CallingConvention.Cdecl)]
     private static extern int crypto_core_ristretto255_add(byte[] r, byte[] p, byte[] q);
 
-    public static byte[] ScalarMul(byte[] point, BigInteger scalar)
+    // ── Scalar operations (all constant-time, mod L) ─────────────
+
+    [DllImport("libsodium", CallingConvention = CallingConvention.Cdecl)]
+    private static extern void crypto_core_ristretto255_scalar_reduce(byte[] r, byte[] s);
+
+    [DllImport("libsodium", CallingConvention = CallingConvention.Cdecl)]
+    private static extern void crypto_core_ristretto255_scalar_add(byte[] z, byte[] x, byte[] y);
+
+    [DllImport("libsodium", CallingConvention = CallingConvention.Cdecl)]
+    private static extern void crypto_core_ristretto255_scalar_sub(byte[] z, byte[] x, byte[] y);
+
+    [DllImport("libsodium", CallingConvention = CallingConvention.Cdecl)]
+    private static extern void crypto_core_ristretto255_scalar_mul(byte[] z, byte[] x, byte[] y);
+
+    // ── Public EC methods ─────────────────────────────────────────
+
+    public static byte[] ScalarMul(byte[] point, byte[] scalar)
     {
         var q = new byte[PointBytes];
-        if (crypto_scalarmult_ristretto255(q, ScalarToBytes(scalar), point) != 0)
+        if (crypto_scalarmult_ristretto255(q, scalar, point) != 0)
             throw new InvalidOperationException("Ristretto255 scalar multiplication failed");
         return q;
     }
@@ -67,14 +80,37 @@ public static class Ristretto255
     public static byte[] HexToPoint(string hex) =>
         Convert.FromHexString(hex);
 
-    // Encode scalar as 32-byte little-endian (libsodium convention).
-    public static byte[] ScalarToBytes(BigInteger scalar)
+    // ── Public scalar methods ─────────────────────────────────────
+
+    // Reduce a 64-byte input to a 32-byte scalar mod L (constant-time).
+    public static byte[] ScalarReduce64(byte[] s64)
     {
-        var s = ((scalar % L) + L) % L;
-        var result = new byte[ScalarBytes];
-        var raw = s.ToByteArray(isUnsigned: true, isBigEndian: false);
-        Array.Copy(raw, result, Math.Min(raw.Length, ScalarBytes));
-        return result;
+        var r = new byte[ScalarBytes];
+        crypto_core_ristretto255_scalar_reduce(r, s64);
+        return r;
+    }
+
+    public static byte[] ScalarSub(byte[] a, byte[] b)
+    {
+        var z = new byte[ScalarBytes];
+        crypto_core_ristretto255_scalar_sub(z, a, b);
+        return z;
+    }
+
+    public static byte[] ScalarMulScalar(byte[] a, byte[] b)
+    {
+        var z = new byte[ScalarBytes];
+        crypto_core_ristretto255_scalar_mul(z, a, b);
+        return z;
+    }
+
+    // Generate a uniform random non-zero scalar via 64 random bytes + reduce.
+    public static byte[] RandomScalar()
+    {
+        byte[] r;
+        do { r = ScalarReduce64(RandomNumberGenerator.GetBytes(64)); }
+        while (CryptographicOperations.FixedTimeEquals(r, new byte[ScalarBytes]));
+        return r;
     }
 }
 
@@ -84,36 +120,23 @@ public static class Ristretto255
 
 public static class CryptoUtil
 {
-    public static byte[] Sha256(byte[] data) => SHA256.HashData(data);
-    public static byte[] Sha256(string data) => Sha256(Encoding.UTF8.GetBytes(data));
+    public static byte[] GetRandomBytes(int n) => RandomNumberGenerator.GetBytes(n);
 
-    public static BigInteger BytesToBigInt(byte[] bytes)
+    private static byte[] Sha256(string s) => SHA256.HashData(Encoding.UTF8.GetBytes(s));
+
+    private static string FormatPart(object p) =>
+        p is byte[] b ? Ristretto255.PointToHex(b) : p.ToString()!;
+
+    // Hash arbitrary parts to a SHA-256 digest (used for non-scalar contexts).
+    public static byte[] HashConcat(params object[] parts) =>
+        Sha256(string.Join("|", parts.Select(FormatPart)));
+
+    // Hash arbitrary parts to a Ristretto255 scalar via SHA-512 + reduce (constant-time).
+    public static byte[] HashToScalar(params object[] parts)
     {
-        var reversed = new byte[bytes.Length + 1];
-        for (int i = 0; i < bytes.Length; i++)
-            reversed[bytes.Length - 1 - i] = bytes[i];
-        return new BigInteger(reversed, isUnsigned: true);
+        var h = SHA512.HashData(Encoding.UTF8.GetBytes(string.Join("|", parts.Select(FormatPart))));
+        return Ristretto255.ScalarReduce64(h);
     }
-
-    public static string BigIntToHex(BigInteger n) =>
-        n.ToString("x").PadLeft(64, '0');
-
-    public static BigInteger HexToBigInt(string hex) =>
-        BigInteger.Parse("0" + hex, System.Globalization.NumberStyles.AllowHexSpecifier);
-
-    public static byte[] HashConcat(params object[] parts)
-    {
-        var strs = parts.Select(p =>
-        {
-            if (p is BigInteger bi) return BigIntToHex(bi);
-            if (p is byte[] bytes) return Ristretto255.PointToHex(bytes);
-            return p.ToString()!;
-        });
-        return Sha256(string.Join("|", strs));
-    }
-
-    public static BigInteger HashToBigInt(params object[] parts) =>
-        BytesToBigInt(HashConcat(parts));
 
     // Convenience alias
     public static byte[] HashToGroup(string element) => Ristretto255.HashToPoint(element);
@@ -125,7 +148,7 @@ public static class CryptoUtil
 
     private static readonly byte[] PedersenH = Ristretto255.HashToPoint("pedersen_generator");
 
-    public static byte[] Commit(byte[][] elements, BigInteger nonce)
+    public static byte[] Commit(byte[][] elements, byte[] nonce)
     {
         var result = Ristretto255.ScalarMul(PedersenH, nonce);
         foreach (var p in elements)
@@ -133,40 +156,28 @@ public static class CryptoUtil
         return result;
     }
 
-    public static bool VerifyCommit(byte[][] elements, BigInteger nonce, byte[] expected)
-    {
-        var computed = Commit(elements, nonce);
-        return Ristretto255.PointEquals(computed, expected);
-    }
+    public static bool VerifyCommit(byte[][] elements, byte[] nonce, byte[] expected) =>
+        Ristretto255.PointEquals(Commit(elements, nonce), expected);
 
     // Multiset equality via characteristic polynomial evaluation (Schwartz-Zippel).
     // Verifies {ordered} and {shuffled} are the same multiset: ∏(t - f(pᵢ)) = ∏(t - f(qⱼ))
-    // where t is a Fiat-Shamir challenge derived from both sets.
     // Soundness error: N/L ≈ 2^-248. Not ZK — verifier computes both sides independently.
     public static bool VerifyShuffleMultiset(byte[][] ordered, byte[][] shuffled)
     {
         if (ordered.Length != shuffled.Length) return false;
-        var L = Ristretto255.L;
-        var t = HashToBigInt(
+        var t = HashToScalar(
             new object[] { "multiset_shuffle" }
                 .Concat(ordered.Cast<object>())
                 .Concat(shuffled.Cast<object>())
-                .ToArray()) % L;
-        BigInteger ordProd = 1, shufProd = 1;
+                .ToArray());
+        var one = new byte[Ristretto255.ScalarBytes]; one[0] = 1;
+        var ordProd  = (byte[])one.Clone();
+        var shufProd = (byte[])one.Clone();
         foreach (var p in ordered)
-            ordProd = ordProd * ((t - HashToBigInt(p) % L + L) % L) % L;
+            ordProd  = Ristretto255.ScalarMulScalar(ordProd,  Ristretto255.ScalarSub(t, HashToScalar(p)));
         foreach (var q in shuffled)
-            shufProd = shufProd * ((t - HashToBigInt(q) % L + L) % L) % L;
-        return ordProd == shufProd;
-    }
-
-    public static byte[] GetRandomBytes(int n) => RandomNumberGenerator.GetBytes(n);
-
-    public static BigInteger RandomScalar()
-    {
-        var bytes = GetRandomBytes(64);
-        var n = BytesToBigInt(bytes);
-        return (n % (Ristretto255.L - 2)) + 2; // uniform in [2, L-1]
+            shufProd = Ristretto255.ScalarMulScalar(shufProd, Ristretto255.ScalarSub(t, HashToScalar(q)));
+        return Ristretto255.PointEquals(ordProd, shufProd);
     }
 
     public static T[] SecureShuffle<T>(T[] arr)
@@ -174,9 +185,7 @@ public static class CryptoUtil
         var a = (T[])arr.Clone();
         for (int i = a.Length - 1; i > 0; i--)
         {
-            var bytes = GetRandomBytes(4);
-            var val = BytesToBigInt(bytes);
-            var j = (int)(val % (i + 1));
+            var j = (int)(BitConverter.ToUInt32(GetRandomBytes(4)) % (i + 1));
             (a[i], a[j]) = (a[j], a[i]);
         }
         return a;
@@ -188,25 +197,33 @@ public static class CryptoUtil
 // Proves: Q_i = k * P_i for all i, with the SAME k
 // ================================================================
 
-public record CpProof(BigInteger C, BigInteger S);
+public record CpProof(byte[] C, byte[] S);
 
 public static class ChaumPedersen
 {
-    private static BigInteger[] ComputeWeights(byte[][] inputs, byte[][] outputs)
+    private static byte[][] ComputeWeights(byte[][] inputs, byte[][] outputs)
     {
-        var L = Ristretto255.L;
+        // Hash all points once to a 32-byte seed, then derive each weight from seed||index.
+        // O(N) hashing instead of O(N²).
         int n = inputs.Length;
-        var allPoints = inputs.Cast<object>().Concat(outputs.Cast<object>()).ToArray();
-        var weights = new BigInteger[n];
+        var seed = CryptoUtil.HashConcat(
+            new object[] { "w_seed" }
+                .Concat(inputs.Cast<object>())
+                .Concat(outputs.Cast<object>())
+                .ToArray());
+        var weights = new byte[n][];
         for (int i = 0; i < n; i++)
         {
-            var args = new object[] { "w", i }.Concat(allPoints).ToArray();
-            weights[i] = (CryptoUtil.HashToBigInt(args) % (L - 1)) + 1;
+            var w = CryptoUtil.HashToScalar(seed, i);
+            // Ensure non-zero (probability 1/L ≈ 2^-252 of being zero)
+            if (CryptographicOperations.FixedTimeEquals(w, new byte[Ristretto255.ScalarBytes]))
+                w[0] = 1;
+            weights[i] = w;
         }
         return weights;
     }
 
-    private static (byte[] A, byte[] B) WeightedSums(byte[][] inputs, byte[][] outputs, BigInteger[] weights)
+    private static (byte[] A, byte[] B) WeightedSums(byte[][] inputs, byte[][] outputs, byte[][] weights)
     {
         var A = Ristretto255.ScalarMul(inputs[0], weights[0]);
         var B = Ristretto255.ScalarMul(outputs[0], weights[0]);
@@ -218,27 +235,25 @@ public static class ChaumPedersen
         return (A, B);
     }
 
-    public static CpProof Prove(byte[][] inputs, byte[][] outputs, BigInteger k)
+    public static CpProof Prove(byte[][] inputs, byte[][] outputs, byte[] k)
     {
-        var L = Ristretto255.L;
-        var weights = ComputeWeights(inputs, outputs);
-        var (A, B) = WeightedSums(inputs, outputs, weights);
-        var v = CryptoUtil.RandomScalar();
-        var R = Ristretto255.ScalarMul(A, v);
-        var c = ((CryptoUtil.HashToBigInt("cp_c", A, B, R) % L) + L) % L;
-        var s = (((v - c * k) % L) + L) % L;
+        var weights  = ComputeWeights(inputs, outputs);
+        var (A, B)   = WeightedSums(inputs, outputs, weights);
+        var v        = Ristretto255.RandomScalar();
+        var R        = Ristretto255.ScalarMul(A, v);
+        var c        = CryptoUtil.HashToScalar("cp_c", A, B, R);
+        var s        = Ristretto255.ScalarSub(v, Ristretto255.ScalarMulScalar(c, k));
         return new CpProof(c, s);
     }
 
     public static bool Verify(byte[][] inputs, byte[][] outputs, CpProof proof)
     {
-        var L = Ristretto255.L;
-        var weights = ComputeWeights(inputs, outputs);
-        var (A, B) = WeightedSums(inputs, outputs, weights);
-        var sA = Ristretto255.ScalarMul(A, proof.S);
-        var cB = Ristretto255.ScalarMul(B, proof.C);
-        var R_prime = Ristretto255.PointAdd(sA, cB);
-        var c_prime = ((CryptoUtil.HashToBigInt("cp_c", A, B, R_prime) % L) + L) % L;
-        return proof.C == c_prime;
+        var weights  = ComputeWeights(inputs, outputs);
+        var (A, B)   = WeightedSums(inputs, outputs, weights);
+        var R_prime  = Ristretto255.PointAdd(
+                           Ristretto255.ScalarMul(A, proof.S),
+                           Ristretto255.ScalarMul(B, proof.C));
+        var c_prime  = CryptoUtil.HashToScalar("cp_c", A, B, R_prime);
+        return Ristretto255.PointEquals(proof.C, c_prime);
     }
 }

@@ -311,68 +311,27 @@ Capping N alone is insufficient if the protocol can be executed without restrict
 | **Total per party** | — | **~1.2 ms** |
 | **Total communication** | — | **~2.8 KB** |
 
-These estimates assume a native constant-time scalar multiplication library (e.g., libsodium) on a modern x86_64 processor. The C# PoC uses libsodium via P/Invoke for all EC operations and measures approximately 60 ms per full two-party run (see Section 7.4), with the remaining overhead coming from `BigInteger` scalar arithmetic in proof weight derivation rather than EC operations. With fully optimised scalar arithmetic, the protocol would approach the sub-millisecond estimate above.
+These estimates assume a native constant-time scalar multiplication library (e.g., libsodium) on a modern x86_64 processor. The C# PoC uses libsodium via P/Invoke for all EC and scalar operations and measures approximately 60 ms per full two-party run (see Section 7.3). The dominant cost is EC scalar multiplication (~128 calls at ~0.18 ms each); scalar arithmetic is negligible. Approaching the sub-millisecond estimate above would require multi-scalar multiplication support, which libsodium's Ristretto255 API does not currently expose.
 
 ### 7.2 Security Considerations for Implementers
 
-- All scalar multiplications must be constant-time to prevent timing side-channel attacks (see Section 7.3 for a detailed discussion).
+- All scalar multiplications must be constant-time to prevent timing side-channel attacks.
 - Random number generation must use a cryptographically secure PRNG (e.g., /dev/urandom, getrandom(), or equivalent).
 - The hash-to-curve function must be implemented correctly per RFC 9380. An incorrect implementation can leak information about inputs.
 - Dummy elements must be generated from a domain provably disjoint from the real element domain D. A simple approach: prepend a fixed tag byte (e.g., 0xFF) to random bytes, while all real elements are prepended with 0x00.
 - The commitment scheme must use independent randomness for each protocol execution.
 - Abort immediately on any verification failure. Do not continue the protocol or provide detailed error messages that could leak information.
 
-### 7.3 Constant-Time Implementation
+### 7.3 C# Proof-of-Concept Implementation
 
-Timing side-channel attacks against scalar multiplication are a real threat: by measuring how long operations take, an attacker may recover secret blinding keys. This section describes what constant-time means, where the C# PoC falls short, and what a production implementation requires.
-
-#### What constant-time requires
-
-Three properties are needed throughout the field and group arithmetic:
-
-**1. No secret-dependent branches.** The classic double-and-add scalar multiplication skips the point addition when a scalar bit is 0, directly leaking the Hamming weight and bit pattern of the secret key via timing. The fix — used by libraries such as [noble-ed25519](https://github.com/paulmillr/noble-ed25519) — is a fake-point ladder: both branches always perform a point addition, with the zero-bit case adding to a discarded accumulator:
-
-```
-// vulnerable: add only happens when bit is 1
-if (bit == 1) result = result + current;
-
-// constant-time: both branches do identical work
-if (bit == 1) result = result + current;
-else          fake   = fake   + current;
-```
-
-**2. No secret-dependent memory access patterns.** Windowed methods (wNAF, fixed-window) look up precomputed table entries using secret indices. Cache timing on the table lookup leaks the index. The mitigation is to read every table entry on every lookup and select the right one using a constant-time conditional move (CMOV), so all memory accesses are identical regardless of the secret.
-
-**3. Branch-free field arithmetic.** The prime `p = 2^255 - 19` has special structure that allows branch-free modular reduction using shifts and masks rather than division. A naive `a % p` call may branch on intermediate values and take variable time depending on the magnitude of `a`.
-
-#### Why the C# PoC is not constant-time
-
-`System.Numerics.BigInteger` is the root cause. Its multiplication, addition, and modular reduction are variable-time: execution time depends on the actual magnitudes of the operands, not just their declared bit width. No amount of algorithmic discipline at the protocol level overcomes this — even a fake-point ladder still calls `BigInteger` field multiply internally, which leaks.
-
-The only fix is to replace `BigInteger` with fixed-width 64-bit limb arithmetic: represent every field element as four `ulong` values and implement multiply, add, and reduce over those limbs with no branches on their contents. This is what libsodium, noble-ed25519 (via JavaScript BigInt with engine-level guarantees), and curve25519-dalek (via Rust's `u64` arithmetic) all do.
-
-#### Path to constant-time in C#
-
-The lowest-effort production path is P/Invoke into libsodium:
-
-```csharp
-// libsodium exposes constant-time Ristretto255 scalar multiplication
-[DllImport("libsodium")]
-static extern int crypto_scalarmult_ristretto255(byte[] q, byte[] n, byte[] p);
-```
-
-This replaces the entire `Ed25519` and `CryptoUtil` field arithmetic layer while leaving `PsiSession`, `ChaumPedersen`, and the message protocol untouched. The `Sodium.Core` NuGet package wraps libsodium but may not expose the low-level Ristretto255 point operations; direct P/Invoke against the native library may be required.
-
-### 7.4 C# Proof-of-Concept Implementation
-
-This repository includes a C# proof-of-concept (`ShiPsi.cs`) targeting .NET 9.0 that implements the full protocol. EC operations use libsodium via P/Invoke (`Sodium.Core` NuGet); scalar arithmetic uses `System.Numerics.BigInteger` from the standard library.
+This repository includes a C# proof-of-concept (`ShiPsi.cs`) targeting .NET 9.0 that implements the full protocol. All EC and scalar operations use libsodium via P/Invoke (`Sodium.Core` NuGet, libsodium 1.0.20+).
 
 **Differences from the specification:**
 
 | Aspect | Specification (Sections 3–4) | C# PoC |
 |--------|------------------------------|--------|
 | Shuffle proofs | Verifiable shuffle with ZK proof (Section 3.5) | Multiset hash check: membership and bijection proven, permutation not hidden (not ZK) |
-| Constant-time operations | Required (Section 7.2) | EC operations are constant-time via libsodium; scalar arithmetic in proof weight derivation uses `BigInteger` and is not constant-time (see Section 7.3) |
+| Constant-time operations | Required (Section 7.2) | All EC and scalar operations are constant-time via libsodium (`crypto_scalarmult_ristretto255`, `crypto_core_ristretto255_scalar_*`) |
 
 **Shuffle proof approach:** The implementation uses a multiset hash check rather than one-out-of-N membership proofs or the full Bayer-Groth ZK shuffle. All three are partial or full replacements for the spec's verifiable shuffle:
 
@@ -390,7 +349,7 @@ The check evaluates the characteristic polynomial of both sets at a Fiat-Shamir 
 
 - `Ristretto255` — P/Invoke wrappers around libsodium: `ScalarMul`, `PointAdd`, `HashToPoint` (SHA-512 → `crypto_core_ristretto255_from_hash`), and encoding helpers. Points are 32-byte compressed Ristretto255 encodings.
 - `CryptoUtil` — SHA-256 hashing, hash-to-group, random scalar generation, Pedersen commitments, multiset shuffle verification, and secure shuffle.
-- `ChaumPedersen` — Batched Chaum-Pedersen proof of consistent scalar multiplication. Derives deterministic weights via Fiat-Shamir; EC operations go through `Ristretto255`, scalar arithmetic uses `BigInteger`.
+- `ChaumPedersen` — Batched Chaum-Pedersen proof of consistent scalar multiplication. Derives deterministic weights via Fiat-Shamir; all EC and scalar operations go through `Ristretto255`.
 - `PsiSession` — Full protocol state machine. Exposes `Commitment()`, `BlindedSet()`, `ProcessBlindedSet()`, `ProcessResponse()`, `ProcessFinal()`, and `Intersection()` matching the phases in Section 4.
 
 **Performance (N = 10, measured on desktop hardware):**
@@ -400,7 +359,7 @@ The check evaluates the characteristic polynomial of both sets at a Fiat-Shamir 
 | Full protocol (two parties, local) | ~60 ms |
 | Communication (serialized hex) | ~14 KB (hex-encoded; ~1.4 KB if binary) |
 
-**To harden for production:** replace the scalar arithmetic in `ChaumPedersen` weight derivation (currently `BigInteger` mod-L operations) with constant-time equivalents, and add verifiable shuffle proofs (Bayer-Groth) to achieve full ZK on the permutation.
+**To harden for production:** add verifiable shuffle proofs (Bayer-Groth) to achieve full ZK on the permutation, and audit the P/Invoke boundary for any memory-safety or timing issues introduced at the C#/native interface.
 
 ---
 
