@@ -372,10 +372,7 @@ This repository includes a C# proof-of-concept (`ShiPsi.cs`) targeting .NET 9.0 
 | Aspect | Specification (Sections 3–4) | C# PoC |
 |--------|------------------------------|--------|
 | Group | Ristretto255 (prime-order abstraction over Curve25519) | Ed25519 twisted Edwards curve with cofactor clearing (×8) |
-| Commitments | Pedersen commitments (perfectly hiding, computationally binding) | Pedersen commitments: `Com({P_i}; r) = r·H + Σ P_i` where `H = HashToGroup("pedersen_generator")` |
-| Hash-to-curve | Elligator 2 per RFC 9380 | Elligator 2: hash to two field elements, map each via Elligator 2 to Curve25519, convert Montgomery to Edwards, add, clear cofactor (×8) |
 | Shuffle proofs | Verifiable shuffle with ZK proof (Section 3.5) | Shuffle is performed but not proven in zero knowledge |
-| Chaum-Pedersen proof | Per-element with batch optimization (Section 3.4) | Batched: random linear combination of all inputs/outputs into a single proof |
 | Constant-time operations | Required (Section 7.2) | Not constant-time; `BigInteger` arithmetic branches on values (see Section 7.3) |
 | Field arithmetic | Native library (e.g., libsodium) | `BigInteger` with extended projective coordinates (X:Y:Z:T) to minimize field inversions |
 
