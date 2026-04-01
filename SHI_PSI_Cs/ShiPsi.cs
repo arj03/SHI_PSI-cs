@@ -311,6 +311,29 @@ public static class CryptoUtil
         return Ed25519.PointEquals(computed, expected);
     }
 
+    // Multiset equality check via characteristic polynomial evaluation (Schwartz-Zippel).
+    // Proves {ordered} and {shuffled} are the same multiset: ∏(t - f(p_i)) = ∏(t - f(q_j))
+    // where t is a Fiat-Shamir challenge derived from both sets.
+    // Soundness error: N/L ≈ 2^-248. Not ZK — verifier computes both products independently.
+    public static bool VerifyShuffleMultiset(
+        (BigInteger X, BigInteger Y)[] ordered,
+        (BigInteger X, BigInteger Y)[] shuffled)
+    {
+        if (ordered.Length != shuffled.Length) return false;
+        var L = Ed25519.L;
+        var t = HashToBigInt(
+            new object[] { "multiset_shuffle" }
+                .Concat(ordered.Cast<object>())
+                .Concat(shuffled.Cast<object>())
+                .ToArray()) % L;
+        BigInteger ordProd = 1, shufProd = 1;
+        foreach (var p in ordered)
+            ordProd = ordProd * ((t - HashToBigInt(p) % L + L) % L) % L;
+        foreach (var q in shuffled)
+            shufProd = shufProd * ((t - HashToBigInt(q) % L + L) % L) % L;
+        return ordProd == shufProd;
+    }
+
     public static T[] SecureShuffle<T>(T[] arr)
     {
         var a = (T[])arr.Clone();

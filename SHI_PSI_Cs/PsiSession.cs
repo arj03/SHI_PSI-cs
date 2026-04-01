@@ -12,8 +12,8 @@ namespace ShiPsiCs;
 public record CommitmentMsg(string Commitment);
 public record BlindedSetMsg(string[] Points, string Nonce);
 public record ProofMsg(string C, string S);
-public record ProcessBlindedSetResponse(string[] DoubleBlinded, ProofMsg Proof, string[] MyPoints, string MyNonce);
-public record ProcessResponseResult(string[] DoubleBlinded, ProofMsg Proof);
+public record ProcessBlindedSetResponse(string[] OrderedDoubleBlinded, string[] DoubleBlinded, ProofMsg Proof, string[] MyPoints, string MyNonce);
+public record ProcessResponseResult(string[] OrderedDoubleBlinded, string[] DoubleBlinded, ProofMsg Proof);
 
 // ================================================================
 // SHI-PSI Session (Ed25519-based)
@@ -94,10 +94,12 @@ public class PsiSession
 
         var doubled = theirPoints.Select(p => Ed25519.ScalarMul(p, _key)).ToArray();
         var proof = ChaumPedersen.Prove(theirPoints, doubled, _key);
-        _theirDoubleBlinded = doubled;
+        var shuffled = CryptoUtil.SecureShuffle(doubled);
+        _theirDoubleBlinded = shuffled;
 
         return new ProcessBlindedSetResponse(
             doubled.Select(Ed25519.PointToHex).ToArray(),
+            shuffled.Select(Ed25519.PointToHex).ToArray(),
             new ProofMsg(CryptoUtil.BigIntToHex(proof.C), CryptoUtil.BigIntToHex(proof.S)),
             _blindedPoints.Select(Ed25519.PointToHex).ToArray(),
             CryptoUtil.BigIntToHex(_commitNonce));
@@ -113,33 +115,45 @@ public class PsiSession
         if (theirPoints.Length != _n)
             throw new InvalidOperationException($"Expected {_n} points, got {theirPoints.Length}");
 
-        var myDoubled = msg.DoubleBlinded.Select(ParsePoint).ToArray();
+        var orderedDoubled = msg.OrderedDoubleBlinded.Select(ParsePoint).ToArray();
+        var shuffledDoubled = msg.DoubleBlinded.Select(ParsePoint).ToArray();
         var proof = new CpProof(CryptoUtil.HexToBigInt(msg.Proof.C), CryptoUtil.HexToBigInt(msg.Proof.S));
 
-        if (!ChaumPedersen.Verify(_blindedPoints, myDoubled, proof))
+        if (orderedDoubled.Length != _n || shuffledDoubled.Length != _n)
+            throw new InvalidOperationException($"Expected {_n} double-blinded points");
+        if (!ChaumPedersen.Verify(_blindedPoints, orderedDoubled, proof))
             throw new InvalidOperationException("Consistency proof verification failed");
+        if (!CryptoUtil.VerifyShuffleMultiset(orderedDoubled, shuffledDoubled))
+            throw new InvalidOperationException("Multiset shuffle verification failed");
 
         _theirBlinded = theirPoints;
-        _myDoubleBlinded = myDoubled;
+        _myDoubleBlinded = orderedDoubled;
 
         var theirDoubled = theirPoints.Select(p => Ed25519.ScalarMul(p, _key)).ToArray();
         var myProof = ChaumPedersen.Prove(theirPoints, theirDoubled, _key);
-        _theirDoubleBlinded = theirDoubled;
+        var myShuffled = CryptoUtil.SecureShuffle(theirDoubled);
+        _theirDoubleBlinded = myShuffled;
 
         return new ProcessResponseResult(
             theirDoubled.Select(Ed25519.PointToHex).ToArray(),
+            myShuffled.Select(Ed25519.PointToHex).ToArray(),
             new ProofMsg(CryptoUtil.BigIntToHex(myProof.C), CryptoUtil.BigIntToHex(myProof.S)));
     }
 
     public void ProcessFinal(ProcessResponseResult msg)
     {
-        var myDoubled = msg.DoubleBlinded.Select(ParsePoint).ToArray();
+        var orderedDoubled = msg.OrderedDoubleBlinded.Select(ParsePoint).ToArray();
+        var shuffledDoubled = msg.DoubleBlinded.Select(ParsePoint).ToArray();
         var proof = new CpProof(CryptoUtil.HexToBigInt(msg.Proof.C), CryptoUtil.HexToBigInt(msg.Proof.S));
 
-        if (!ChaumPedersen.Verify(_blindedPoints, myDoubled, proof))
+        if (orderedDoubled.Length != _n || shuffledDoubled.Length != _n)
+            throw new InvalidOperationException($"Expected {_n} double-blinded points");
+        if (!ChaumPedersen.Verify(_blindedPoints, orderedDoubled, proof))
             throw new InvalidOperationException("Consistency proof verification failed");
+        if (!CryptoUtil.VerifyShuffleMultiset(orderedDoubled, shuffledDoubled))
+            throw new InvalidOperationException("Multiset shuffle verification failed");
 
-        _myDoubleBlinded = myDoubled;
+        _myDoubleBlinded = orderedDoubled;
     }
 
     public string[] Intersection()

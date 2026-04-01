@@ -372,9 +372,21 @@ This repository includes a C# proof-of-concept (`ShiPsi.cs`) targeting .NET 9.0 
 | Aspect | Specification (Sections 3–4) | C# PoC |
 |--------|------------------------------|--------|
 | Group | Ristretto255 (prime-order abstraction over Curve25519) | Ed25519 twisted Edwards curve with cofactor clearing (×8) |
-| Shuffle proofs | Verifiable shuffle with ZK proof (Section 3.5) | Shuffle is performed but not proven in zero knowledge |
+| Shuffle proofs | Verifiable shuffle with ZK proof (Section 3.5) | Multiset hash check: membership and bijection proven, permutation not hidden (not ZK) |
 | Constant-time operations | Required (Section 7.2) | Not constant-time; `BigInteger` arithmetic branches on values (see Section 7.3) |
 | Field arithmetic | Native library (e.g., libsodium) | `BigInteger` with extended projective coordinates (X:Y:Z:T) to minimize field inversions |
+
+**Shuffle proof approach:** The implementation uses a multiset hash check rather than one-out-of-N membership proofs or the full Bayer-Groth ZK shuffle. All three are partial or full replacements for the spec's verifiable shuffle:
+
+| Approach | Membership | Bijection | ZK |
+|----------|------------|-----------|-----|
+| Multiset hash (implemented) | ✓ | ✓ | ✗ |
+| One-out-of-N membership proof | ✓ | ✗ | ✓ |
+| Bayer-Groth (spec) | ✓ | ✓ | ✓ |
+
+Multiset hash is preferred over one-out-of-N because bijection is the security-critical property: without it, a malicious party could map the same input element to multiple output positions, inflating or manipulating the intersection. One-out-of-N proofs are ZK but do not prevent this — each output passes its membership check independently. The missing ZK property in the multiset approach reveals only the shuffling party's internal permutation order, which has limited value to the verifier in this two-party setting.
+
+The check evaluates the characteristic polynomial of both sets at a Fiat-Shamir challenge `t = H("multiset_shuffle", ordered..., shuffled...)`: `∏(t − f(pᵢ)) = ∏(t − f(qⱼ))` over Z_L. Soundness error is N/L ≈ 2⁻²⁴⁸. The prover transmits both the ordered double-blinded set (used by the verifier to check the CP proof) and the shuffled set (used for intersection), adding N points to the message.
 
 **Architecture:**
 
