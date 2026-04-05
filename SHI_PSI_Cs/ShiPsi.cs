@@ -253,7 +253,7 @@ public static class ChaumPedersen
         }
 
         var weights = new byte[n][];
-        for (int i = 0; i < n; i++)
+        Parallel.For(0, n, i =>
         {
             using var t = new Transcript();
             t.Append(seed).Append(i);
@@ -261,7 +261,7 @@ public static class ChaumPedersen
             if (CryptographicOperations.FixedTimeEquals(w, new byte[Ristretto255.ScalarBytes]))
                 w[0] = 1;
             weights[i] = w;
-        }
+        });
         return weights;
     }
 
@@ -269,12 +269,19 @@ public static class ChaumPedersen
         byte[][] inputs, byte[][] outputs, byte[][] weights)
     {
         int n = inputs.Length;
-        var A = Ristretto255.ScalarMul(inputs[0], weights[0]);
-        var B = Ristretto255.ScalarMul(outputs[0], weights[0]);
+        var As = new byte[n][];
+        var Bs = new byte[n][];
+        Parallel.For(0, n, i =>
+        {
+            As[i] = Ristretto255.ScalarMul(inputs[i], weights[i]);
+            Bs[i] = Ristretto255.ScalarMul(outputs[i], weights[i]);
+        });
+        var A = As[0];
+        var B = Bs[0];
         for (int i = 1; i < n; i++)
         {
-            A = Ristretto255.PointAdd(A, Ristretto255.ScalarMul(inputs[i], weights[i]));
-            B = Ristretto255.PointAdd(B, Ristretto255.ScalarMul(outputs[i], weights[i]));
+            A = Ristretto255.PointAdd(A, As[i]);
+            B = Ristretto255.PointAdd(B, Bs[i]);
         }
         return (A, B);
     }

@@ -67,12 +67,12 @@ public class PsiSession
             padded[i] = DummyTag + Convert.ToHexString(CryptoUtil.GetRandomBytes(16));
 
         var blindedList = new byte[n][];
-        for (int i = 0; i < n; i++)
+        Parallel.For(0, n, i =>
         {
-            var bp = Ristretto255.ScalarMul(Ristretto255.HashToPoint(padded[i]), _key);
-            blindedList[i] = bp;
-            _myBlindedMap[Ristretto255.PointToHex(bp)] = padded[i];
-        }
+            blindedList[i] = Ristretto255.ScalarMul(Ristretto255.HashToPoint(padded[i]), _key);
+        });
+        for (int i = 0; i < n; i++)
+            _myBlindedMap[Ristretto255.PointToHex(blindedList[i])] = padded[i];
         _blindedPoints = CryptoUtil.SecureShuffle(blindedList);
 
         _commitNonce  = Ristretto255.RandomScalar();
@@ -128,8 +128,8 @@ public class PsiSession
     private (byte[][] doubled, CpProof proof) DoubleBlindAndProve(byte[][] theirPoints)
     {
         var doubled = new byte[_n][];
-        for (int i = 0; i < _n; i++)
-            doubled[i] = Ristretto255.ScalarMul(theirPoints[i], _key);
+        Parallel.For(0, _n, i =>
+            doubled[i] = Ristretto255.ScalarMul(theirPoints[i], _key));
 
         var proof = ChaumPedersen.Prove(theirPoints, doubled, _key, ProveContext());
         return (doubled, proof);
