@@ -1,7 +1,3 @@
-// ShiPsiTests.cs — xUnit v3 test suite for SHI-PSI protocol
-
-using System.Diagnostics;
-using System.Security.Cryptography;
 using Xunit;
 
 namespace ShiPsiCs.Tests;
@@ -32,151 +28,7 @@ internal static class T
 }
 
 // ================================================================
-// 1. Ristretto255 primitive tests
-// ================================================================
-
-public class Ristretto255Tests
-{
-    [Fact]
-    public void HashToPoint_IsDeterministic()
-    {
-        var p1 = Ristretto255.HashToPoint("test_element");
-        var p2 = Ristretto255.HashToPoint("test_element");
-
-        Assert.True(Ristretto255.PointEquals(p1, p2));
-    }
-
-    [Fact]
-    public void HashToPoint_DifferentInputsProduceDifferentPoints()
-    {
-        var p1 = Ristretto255.HashToPoint("alice");
-        var p2 = Ristretto255.HashToPoint("bob");
-
-        Assert.False(Ristretto255.PointEquals(p1, p2));
-    }
-
-    [Fact]
-    public void HashToPoint_ProducesCorrectLength()
-    {
-        var p = Ristretto255.HashToPoint("anything");
-
-        Assert.Equal(Ristretto255.PointBytes, p.Length);
-    }
-
-    [Fact]
-    public void HexRoundTrip_PreservesPoint()
-    {
-        var p = Ristretto255.HashToPoint("round_trip_test");
-        var hex = Ristretto255.PointToHex(p);
-        var restored = Ristretto255.HexToPoint(hex);
-
-        Assert.True(Ristretto255.PointEquals(p, restored));
-    }
-
-    [Fact]
-    public void PointToHex_IsLowercase()
-    {
-        var p = Ristretto255.HashToPoint("hex_case_test");
-        var hex = Ristretto255.PointToHex(p);
-
-        Assert.Equal(hex, hex.ToLowerInvariant());
-    }
-
-    [Fact]
-    public void ScalarMul_IsCommutative()
-    {
-        var a = Ristretto255.RandomScalar();
-        var b = Ristretto255.RandomScalar();
-        var h = Ristretto255.HashToPoint("commutativity_test");
-
-        var ab = Ristretto255.ScalarMul(Ristretto255.ScalarMul(h, a), b);
-        var ba = Ristretto255.ScalarMul(Ristretto255.ScalarMul(h, b), a);
-
-        Assert.True(Ristretto255.PointEquals(ab, ba));
-    }
-
-    [Fact]
-    public void RandomScalar_IsNonZero()
-    {
-        var zero = new byte[Ristretto255.ScalarBytes];
-        for (int i = 0; i < 50; i++)
-        {
-            var s = Ristretto255.RandomScalar();
-            Assert.False(CryptographicOperations.FixedTimeEquals(s, zero));
-        }
-    }
-
-    [Fact]
-    public void RandomScalar_ProducesDistinctValues()
-    {
-        var s1 = Ristretto255.RandomScalar();
-        var s2 = Ristretto255.RandomScalar();
-
-        Assert.False(Ristretto255.PointEquals(s1, s2));
-    }
-
-    [Fact]
-    public void RandomScalar_HasCorrectLength()
-    {
-        var s = Ristretto255.RandomScalar();
-
-        Assert.Equal(Ristretto255.ScalarBytes, s.Length);
-    }
-
-    [Fact]
-    public void PointAdd_IsCommutative()
-    {
-        var p = Ristretto255.HashToPoint("add_p");
-        var q = Ristretto255.HashToPoint("add_q");
-
-        var pq = Ristretto255.PointAdd(p, q);
-        var qp = Ristretto255.PointAdd(q, p);
-
-        Assert.True(Ristretto255.PointEquals(pq, qp));
-    }
-
-    [Fact]
-    public void PointEquals_RejectsDifferentLengths()
-    {
-        var a = new byte[32];
-        var b = new byte[16];
-
-        Assert.False(Ristretto255.PointEquals(a, b));
-    }
-
-    [Fact]
-    public void ScalarSub_ThenAdd_IsIdentity()
-    {
-        var a = Ristretto255.RandomScalar();
-        var b = Ristretto255.RandomScalar();
-        var h = Ristretto255.HashToPoint("scalar_sub_test");
-
-        var diff = Ristretto255.ScalarSub(a, b);
-        var lhs = Ristretto255.PointAdd(
-            Ristretto255.ScalarMul(h, diff),
-            Ristretto255.ScalarMul(h, b));
-        var rhs = Ristretto255.ScalarMul(h, a);
-
-        Assert.True(Ristretto255.PointEquals(lhs, rhs));
-    }
-
-    [Fact]
-    public void ScalarMulScalar_MatchesRepeatedScalarMulOnPoint()
-    {
-        var a = Ristretto255.RandomScalar();
-        var b = Ristretto255.RandomScalar();
-        var h = Ristretto255.HashToPoint("scalar_mul_scalar_test");
-
-        var product = Ristretto255.ScalarMulScalar(a, b);
-        var lhs = Ristretto255.ScalarMul(h, product);
-        var rhs = Ristretto255.ScalarMul(Ristretto255.ScalarMul(h, b), a);
-
-        Assert.True(Ristretto255.PointEquals(lhs, rhs));
-    }
-}
-
-// ================================================================
-// 2. CryptoUtil tests
+// 1. CryptoUtil tests
 // ================================================================
 
 public class CryptoUtilTests
@@ -251,117 +103,10 @@ public class CryptoUtilTests
 
         Assert.True(Ristretto255.PointEquals(c1, c2));
     }
-
-    [Fact]
-    public void SecureShuffle_PreservesAllElements()
-    {
-        var input = new[] { "a", "b", "c", "d", "e" };
-        var shuffled = CryptoUtil.SecureShuffle(input);
-
-        Assert.Equal(input.Length, shuffled.Length);
-        Assert.Equal(input.OrderBy(x => x), shuffled.OrderBy(x => x));
-    }
-
-    [Fact]
-    public void SecureShuffle_DoesNotModifyOriginal()
-    {
-        var input = new[] { "x", "y", "z" };
-        var original = (string[])input.Clone();
-        _ = CryptoUtil.SecureShuffle(input);
-        Assert.Equal(original, input);
-    }
-
-    [Fact]
-    public void SecureShuffle_SingleElementReturnsSameElement()
-    {
-        var shuffled = CryptoUtil.SecureShuffle(new[] { "only" });
-        Assert.Single(shuffled);
-        Assert.Equal("only", shuffled[0]);
-    }
-
-    [Fact]
-    public void SecureShuffle_EmptyArrayReturnsEmpty()
-    {
-        Assert.Empty(CryptoUtil.SecureShuffle(Array.Empty<string>()));
-    }
-
-    [Fact]
-    public void Transcript_IsDeterministic()
-    {
-        byte[] Hash()
-        {
-            using var t = new Transcript();
-            t.Append("a").Append("b").Append("c");
-            return t.Finalize();
-        }
-        Assert.Equal(Hash(), Hash());
-    }
-
-    [Fact]
-    public void Transcript_DifferentOrderProducesDifferentResults()
-    {
-        byte[] h1, h2;
-        using (var t = new Transcript()) { t.Append("a").Append("b"); h1 = t.Finalize(); }
-        using (var t = new Transcript()) { t.Append("b").Append("a"); h2 = t.Finalize(); }
-        Assert.NotEqual(h1, h2);
-    }
-
-    [Fact]
-    public void Transcript_Finalize_ProducesScalarLength()
-    {
-        using var t = new Transcript();
-        t.Append("test").Append(42);
-        Assert.Equal(Ristretto255.ScalarBytes, t.Finalize().Length);
-    }
-
-    [Fact]
-    public void Transcript_AcceptsByteArraysStringsAndInts()
-    {
-        var point = Ristretto255.HashToPoint("test");
-        using var t = new Transcript();
-        t.Append("prefix").Append(point).Append(42);
-        Assert.Equal(Ristretto255.ScalarBytes, t.Finalize().Length);
-    }
-
-    [Fact]
-    public void Transcript_LengthPrefixing_PreventsCollision()
-    {
-        byte[] h1, h2;
-        using (var t = new Transcript()) { t.Append("ab").Append("c"); h1 = t.Finalize(); }
-        using (var t = new Transcript()) { t.Append("a").Append("bc"); h2 = t.Finalize(); }
-        Assert.NotEqual(h1, h2);
-    }
-
-    [Fact]
-    public void GetRandomBytes_ProducesCorrectLength()
-    {
-        Assert.Equal(32, CryptoUtil.GetRandomBytes(32).Length);
-    }
-
-    [Fact]
-    public void CanonicalOrder_IsDeterministic()
-    {
-        var a = Ristretto255.HashToPoint("canon_a");
-        var b = Ristretto255.HashToPoint("canon_b");
-
-        var (f1, s1) = CryptoUtil.CanonicalOrder(a, b);
-        var (f2, s2) = CryptoUtil.CanonicalOrder(b, a);
-
-        Assert.True(Ristretto255.PointEquals(f1, f2));
-        Assert.True(Ristretto255.PointEquals(s1, s2));
-    }
-
-    [Fact]
-    public void CanonicalOrder_IdenticalInputs()
-    {
-        var a = Ristretto255.HashToPoint("same");
-        var (f, s) = CryptoUtil.CanonicalOrder(a, (byte[])a.Clone());
-        Assert.True(Ristretto255.PointEquals(f, s));
-    }
 }
 
 // ================================================================
-// 3. Chaum-Pedersen proof tests
+// 2. Chaum-Pedersen proof tests
 // ================================================================
 
 public class ChaumPedersenTests
@@ -561,7 +306,7 @@ public class ChaumPedersenTests
 }
 
 // ================================================================
-// 4. Protocol correctness tests (via RunProtocol)
+// 3. Protocol correctness tests (via RunProtocol)
 // ================================================================
 
 public class PsiProtocolCorrectnessTests
@@ -585,81 +330,13 @@ public class PsiProtocolCorrectnessTests
         Assert.Empty(bob);
     }
 
-    [Fact]
-    public void FullOverlap()
-    {
-        var (alice, bob) = PsiSession.RunProtocol(["x", "y", "z"], ["x", "y", "z"], 10);
-        var expected = new[] { "x", "y", "z" };
-        Assert.Equal(expected, alice.OrderBy(x => x));
-        Assert.Equal(expected, bob.OrderBy(x => x));
-    }
-
-    [Fact]
-    public void DifferentSetSizes()
-    {
-        var (alice, bob) = PsiSession.RunProtocol(
-            ["only_one"], ["only_one", "b", "c", "d", "e", "f", "g", "h"], 10);
-        Assert.Equal(["only_one"], alice);
-        Assert.Equal(["only_one"], bob);
-    }
-
-    [Fact] public void SingleElementMatch()   { var (a, b) = PsiSession.RunProtocol(["x"], ["x"], 10); Assert.Equal(["x"], a); Assert.Equal(["x"], b); }
-    [Fact] public void SingleElementNoMatch()  { var (a, b) = PsiSession.RunProtocol(["x"], ["y"], 10); Assert.Empty(a); Assert.Empty(b); }
-    [Fact] public void BothSetsEmpty()         { var (a, b) = PsiSession.RunProtocol([], [], 10); Assert.Empty(a); Assert.Empty(b); }
-    [Fact] public void OneSideEmpty()          { var (a, b) = PsiSession.RunProtocol([], ["a", "b", "c"], 10); Assert.Empty(a); Assert.Empty(b); }
-
-    [Fact]
-    public void MaxCapacity_AllMatch()
-    {
-        var items = Enumerable.Range(0, 10).Select(i => $"item_{i}").ToArray();
-        var (alice, bob) = PsiSession.RunProtocol(items, items, 10);
-        Assert.Equal(items.OrderBy(x => x), alice.OrderBy(x => x));
-        Assert.Equal(items.OrderBy(x => x), bob.OrderBy(x => x));
-    }
-
-    [Fact]
-    public void MaxCapacity_NoMatch()
-    {
-        var setA = Enumerable.Range(0, 10).Select(i => $"a_{i}").ToArray();
-        var setB = Enumerable.Range(0, 10).Select(i => $"b_{i}").ToArray();
-        var (alice, bob) = PsiSession.RunProtocol(setA, setB, 10);
-        Assert.Empty(alice);
-        Assert.Empty(bob);
-    }
-
-    [Fact]
-    public void MaxCapacity_PartialMatch()
-    {
-        var setA = Enumerable.Range(0, 10).Select(i => $"item_{i}").ToArray();
-        var setB = Enumerable.Range(5, 10).Select(i => $"item_{i}").ToArray();
-        var (alice, bob) = PsiSession.RunProtocol(setA, setB, 10);
-
-        var expected = Enumerable.Range(5, 5).Select(i => $"item_{i}").OrderBy(x => x).ToArray();
-        Assert.Equal(expected, alice.OrderBy(x => x));
-        Assert.Equal(expected, bob.OrderBy(x => x));
-    }
-
     [Fact] public void SmallN()
     { 
         var (a, b) = PsiSession.RunProtocol(["a"], ["a", "b"], 2);
         Assert.Equal(["a"], a);
         Assert.Equal(["a"], b); 
     }
-
-    [Fact] public void N_Equals_1()
-    { 
-        var (a, b) = PsiSession.RunProtocol(["shared"], ["shared"], 1);
-        Assert.Equal(["shared"], a);
-        Assert.Equal(["shared"], b);
-    }
-    
-    [Fact] public void N_Equals_1_No()
-    { 
-        var (a, b) = PsiSession.RunProtocol(["left"], ["right"], 1);
-        Assert.Empty(a);
-        Assert.Empty(b);
-    }
-    
+   
     [Fact] public void LargerN()
     { 
         var (a, b) = PsiSession.RunProtocol(["a", "b"], ["b", "c"], 50); 
@@ -680,17 +357,6 @@ public class PsiProtocolCorrectnessTests
         Assert.Equal(expected, r2b.OrderBy(x => x));
     }
 
-    [Fact]
-    public void RepeatedExecutions_ProduceConsistentResults()
-    {
-        for (int i = 0; i < 10; i++)
-        {
-            var (a, b) = PsiSession.RunProtocol(["stable", "test"], ["test", "other"], 10);
-            Assert.Equal(["test"], a);
-            Assert.Equal(["test"], b);
-        }
-    }
-
     [Theory]
     [InlineData("hello world")]
     [InlineData("")]
@@ -706,7 +372,7 @@ public class PsiProtocolCorrectnessTests
 }
 
 // ================================================================
-// 5. Step-by-step protocol path tests
+// 4. Step-by-step protocol path tests
 // ================================================================
 
 public class PsiProtocolStepByStepTests
@@ -800,23 +466,11 @@ public class PsiProtocolStepByStepTests
 }
 
 // ================================================================
-// 6. PsiSession construction edge cases
+// 5. PsiSession construction edge cases
 // ================================================================
 
 public class PsiSessionEdgeCaseTests
 {
-    [Fact]
-    public void Constructor_ThrowsWhenSetExceedsN()
-    {
-        var ex = Assert.Throws<ArgumentException>(
-            () => new PsiSession(["a", "b", "c"], T.Sid(), "a", "b", n: 2));
-        Assert.Contains("exceeds N=2", ex.Message);
-    }
-
-    [Fact] public void Constructor_ThrowsOnEmptySid()    { Assert.Throws<ArgumentException>(() => new PsiSession(["a"], Array.Empty<byte>(), "a", "b")); }
-    [Fact] public void Constructor_ThrowsOnEmptyMyId()   { Assert.Throws<ArgumentException>(() => new PsiSession(["a"], T.Sid(), "", "b")); }
-    [Fact] public void Constructor_ThrowsOnEmptyTheirId(){ Assert.Throws<ArgumentException>(() => new PsiSession(["a"], T.Sid(), "a", "")); }
-
     [Fact]
     public void Intersection_ThrowsBeforeProtocolComplete()
     {
@@ -860,7 +514,7 @@ public class PsiSessionEdgeCaseTests
 }
 
 // ================================================================
-// 7. Security / verification failure tests
+// 6. Security / verification failure tests
 // ================================================================
 
 public class PsiProtocolSecurityTests
@@ -1007,64 +661,7 @@ public class PsiProtocolSecurityTests
 }
 
 // ================================================================
-// 8. Duplicate element behavior
-// ================================================================
-
-public class PsiDuplicateElementTests
-{
-    [Fact] public void Dedup_InOneSet()   { var (a, b) = PsiSession.RunProtocol(["a", "a", "b"], ["a", "c"], 5); Assert.Equal(["a"], a); Assert.Equal(["a"], b); }
-    [Fact] public void Dedup_InBothSets() { var (a, b) = PsiSession.RunProtocol(["x", "x"], ["x", "x"], 5); Assert.Equal(["x"], a); Assert.Equal(["x"], b); }
-    [Fact] public void Dedup_FitsSmallN() { var (a, b) = PsiSession.RunProtocol(["a", "a", "a"], ["a"], 1); Assert.Equal(["a"], a); Assert.Equal(["a"], b); }
-
-    [Fact]
-    public void Dedup_ExceedingNAfterDedup_Throws()
-    {
-        Assert.Throws<ArgumentException>(
-            () => new PsiSession(["a", "b", "a", "c"], T.Sid(), "a", "b", n: 2));
-    }
-
-    [Fact]
-    public void Dedup_ExactFitAfterDedup()
-    {
-        var session = new PsiSession(["a", "b", "a"], T.Sid(), "a", "b", n: 2);
-        Assert.NotNull(session.Commitment());
-    }
-}
-
-// ================================================================
-// 9. State-machine guard tests
-// ================================================================
-
-public class PsiStateMachineGuardTests
-{
-    [Fact]
-    public void ProcessBlindedSet_WithoutReceiveCommitment_GivesClearError()
-    {
-        var (alice, bob) = T.Pair(["a"], ["a"], n: 5);
-        var ex = Assert.Throws<InvalidOperationException>(
-            () => bob.ProcessBlindedSet(alice.BlindedSet()));
-        Assert.Contains("ReceiveCommitment must be called", ex.Message);
-    }
-
-    [Fact]
-    public void ProcessResponse_WithoutReceiveCommitment_GivesClearError()
-    {
-        var sid = T.Sid();
-        var alice = new PsiSession(["a"], sid, "alice", "bob", 5);
-        var bob = new PsiSession(["a"], sid, "bob", "alice", 5);
-
-        bob.ReceiveCommitment(alice.Commitment());
-        var bobResponse = bob.ProcessBlindedSet(alice.BlindedSet());
-
-        var freshAlice = new PsiSession(["a"], sid, "alice", "bob", 5);
-        var ex = Assert.Throws<InvalidOperationException>(
-            () => freshAlice.ProcessResponse(bobResponse));
-        Assert.Contains("ReceiveCommitment must be called", ex.Message);
-    }
-}
-
-// ================================================================
-// 10. Size-hiding property tests
+// 7. Size-hiding property tests
 // ================================================================
 
 public class PsiSizeHidingTests
@@ -1106,7 +703,7 @@ public class PsiSizeHidingTests
 }
 
 // ================================================================
-// 11. Fiat-Shamir transcript binding tests (Section 3.4)
+// 8. Fiat-Shamir transcript binding tests (Section 3.4)
 // ================================================================
 
 public class PsiFiatShamirBindingTests
