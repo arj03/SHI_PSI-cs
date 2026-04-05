@@ -304,7 +304,7 @@ The attack cannot be detected by the honest party. Blinded elements (whether der
 
 #### 6.3.2 Mitigation: Capping N well below |D|
 
-The primary defense is setting the pad-to parameter N much smaller than the domain size |D|, following the bounded size-hiding approach of Bradley, Faber, and Tsudik (SCN 2016) who showed that security can be maintained even when the pad-to size does not cover the full domain. With N = 10 and |D| = 100:
+The primary defense is setting the pad-to parameter N much smaller than the domain size |D|, following the bounded size-hiding approach of Bradley, Faber, and Tsudik (BTF16) who showed that security can be maintained even when the pad-to size does not cover the full domain. With N = 10 and |D| = 100:
 
 - **Per-run exposure:** An attacker can probe at most N/|D| = 10% of the domain per execution. If the honest party holds 10 elements, the expected number of elements an attacker discovers per run is approximately 10 × (10/100) = 1.
 - **Runs to full enumeration:** An attacker needs at least ⌈|D|/N⌉ = 10 protocol executions to cover the entire domain.
