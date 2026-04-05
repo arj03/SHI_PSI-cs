@@ -12,7 +12,7 @@ This document specifies a cryptographic protocol for Private Set Intersection (P
 
 The protocol is designed for the following operational context:
 
-- **Domain size:** The universe of possible element values |D| may be arbitrarily large. When |D| is small, the reduced enumeration cost creates additional attack surface; the protocol includes specific countermeasures (described in Section 6) to mitigate this.
+- **Domain size:** The universe of possible element values, may be arbitrarily large. When the domain is small, the reduced enumeration cost creates additional attack surface; the protocol includes specific countermeasures (described in Section 6) to mitigate this.
 - **Set scale:** Each party holds a small number of elements (fewer than 1000) drawn from this domain.
 - **Security model:** Malicious adversaries who may deviate arbitrarily from the protocol.
 - **Privacy goal:** Neither party learns the other party's set size or any elements outside the intersection.
