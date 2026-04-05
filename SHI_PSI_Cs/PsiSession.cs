@@ -35,7 +35,6 @@ public class PsiSession
     private readonly string _theirId;
 
     private byte[]? _theirCommitment;
-    private byte[][]? _theirBlinded;
     private byte[][]? _myDoubleBlinded;
     private byte[][]? _theirDoubleBlinded;
 
@@ -140,7 +139,6 @@ public class PsiSession
     public ProcessBlindedSetResponse ProcessBlindedSet(BlindedSetMsg msg)
     {
         VerifyCommitment(msg.Points, msg.Nonce);
-        _theirBlinded = msg.Points;
 
         var (doubled, proof) = DoubleBlindAndProve(msg.Points);
         _theirDoubleBlinded = doubled;
@@ -155,7 +153,6 @@ public class PsiSession
 
         VerifyProof(msg.DoubleBlinded, msg.Proof);
 
-        _theirBlinded    = msg.MyPoints;
         _myDoubleBlinded = msg.DoubleBlinded;
 
         var (doubled, proof) = DoubleBlindAndProve(msg.MyPoints);

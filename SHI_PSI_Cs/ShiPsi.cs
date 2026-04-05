@@ -218,7 +218,7 @@ public static class CryptoUtil
             uint val;
             do
             {
-                RandomNumberGenerator.Fill(buf);
+                    RandomNumberGenerator.Fill(buf);
                 val = BitConverter.ToUInt32(buf);
             }
             while (val >= limit);
@@ -238,6 +238,7 @@ public record CpProof(byte[] C, byte[] S);
 
 public static class ChaumPedersen
 {
+    private static readonly byte[] ScalarZero = new byte[Ristretto255.ScalarBytes];
     private static void AppendContext(
         Transcript t, FiatShamirContext ctx, byte[][] inputs, byte[][] outputs)
     {
@@ -265,7 +266,7 @@ public static class ChaumPedersen
             using var t = new Transcript();
             t.Append(seed).Append(i);
             var w = t.Finalize();
-            if (CryptographicOperations.FixedTimeEquals(w, new byte[Ristretto255.ScalarBytes]))
+            if (CryptographicOperations.FixedTimeEquals(w, ScalarZero))
                 w[0] = 1;
             weights[i] = w;
         });
