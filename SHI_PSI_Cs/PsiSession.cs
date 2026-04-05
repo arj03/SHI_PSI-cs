@@ -6,14 +6,15 @@ namespace ShiPsiCs;
 // Protocol messages
 // ================================================================
 
-public record CommitmentMsg(string Commitment);
-public record BlindedSetMsg(string[] Points, string Nonce);
-public record ProofMsg(string C, string S);
-public record ProcessBlindedSetResponse(string[] OrderedDoubleBlinded, string[] DoubleBlinded, ProofMsg Proof, string[] MyPoints, string MyNonce);
-public record ProcessResponseResult(string[] OrderedDoubleBlinded, string[] DoubleBlinded, ProofMsg Proof);
+public record BlindedSetMsg(byte[][] Points, byte[] Nonce);
+public record ProcessBlindedSetResponse(
+    byte[][] DoubleBlinded, CpProof Proof,
+    byte[][] MyPoints, byte[] MyNonce);
+public record ProcessResponseResult(
+    byte[][] DoubleBlinded, CpProof Proof);
 
 // ================================================================
-// SHI-PSI Session (Ristretto255 via libsodium)
+// SHI-PSI Session
 // ================================================================
 
 public class PsiSession
@@ -28,23 +29,42 @@ public class PsiSession
     private readonly byte[] _myCommitment;
     private readonly Dictionary<string, string> _myBlindedMap = new();
 
+    // Fiat-Shamir transcript binding (Section 3.4)
+    private readonly byte[] _sid;
+    private readonly string _myId;
+    private readonly string _theirId;
+
     private byte[]? _theirCommitment;
     private byte[][]? _theirBlinded;
     private byte[][]? _myDoubleBlinded;
     private byte[][]? _theirDoubleBlinded;
 
-    public PsiSession(string[] myElements, int n = DefaultN)
+    public PsiSession(string[] myElements, byte[] sid, string myId, string theirId, int n = DefaultN)
     {
-        if (myElements.Length > n)
-            throw new ArgumentException($"Set size {myElements.Length} exceeds N={n}");
+        if (sid == null || sid.Length == 0)
+            throw new ArgumentException("Session ID (sid) must be non-empty");
+        if (string.IsNullOrEmpty(myId))
+            throw new ArgumentException("Party ID (myId) must be non-empty");
+        if (string.IsNullOrEmpty(theirId))
+            throw new ArgumentException("Party ID (theirId) must be non-empty");
 
-        _n   = n;
-        _key = Ristretto255.RandomScalar();
+        // Deduplicate: the protocol operates on sets, not multisets.
+        var distinct = myElements.Distinct().ToArray();
+        if (distinct.Length > n)
+            throw new ArgumentException($"Set size {distinct.Length} exceeds N={n}");
+
+        _n       = n;
+        _sid     = sid;
+        _myId    = myId;
+        _theirId = theirId;
+        _key     = Ristretto255.RandomScalar();
 
         // Phase 0: pad, blind, shuffle
-        var padded = new List<string>(myElements);
-        while (padded.Count < n)
-            padded.Add(DummyTag + Convert.ToHexString(CryptoUtil.GetRandomBytes(16)));
+        var padded = new string[n];
+        for (int i = 0; i < distinct.Length; i++)
+            padded[i] = distinct[i];
+        for (int i = distinct.Length; i < n; i++)
+            padded[i] = DummyTag + Convert.ToHexString(CryptoUtil.GetRandomBytes(16));
 
         var blindedList = new byte[n][];
         for (int i = 0; i < n; i++)
@@ -59,132 +79,135 @@ public class PsiSession
         _myCommitment = CryptoUtil.Commit(_blindedPoints, _commitNonce);
     }
 
-    public CommitmentMsg Commitment() => new(Ristretto255.PointToHex(_myCommitment));
+    // ── Commitment exchange ──────────────────────────────────────
 
-    public void ReceiveCommitment(CommitmentMsg msg)
+    public byte[] Commitment() => _myCommitment;
+
+    public void ReceiveCommitment(byte[] commitment) =>
+        _theirCommitment = commitment;
+
+    // ── Blinded set exchange ─────────────────────────────────────
+
+    public BlindedSetMsg BlindedSet() => new(_blindedPoints, _commitNonce);
+
+    // ── Core protocol logic ──────────────────────────────────────
+
+    private void VerifyCommitment(byte[][] points, byte[] nonce)
     {
-        _theirCommitment = Ristretto255.HexToPoint(msg.Commitment);
+        if (_theirCommitment == null)
+            throw new InvalidOperationException(
+                "ReceiveCommitment must be called before processing messages");
+        if (points.Length != _n)
+            throw new InvalidOperationException($"Expected {_n} points, got {points.Length}");
+        if (!CryptoUtil.VerifyCommit(points, nonce, _theirCommitment))
+            throw new InvalidOperationException("Commitment verification failed");
     }
 
-    public BlindedSetMsg BlindedSet() => new(
-        _blindedPoints.Select(Ristretto255.PointToHex).ToArray(),
-        Convert.ToHexString(_commitNonce));
+    // Canonical commitment ordering ensures prover and verifier
+    // include both commitments in the same deterministic order.
+    private FiatShamirContext ProveContext()
+    {
+        var (c1, c2) = CryptoUtil.CanonicalOrder(_myCommitment, _theirCommitment!);
+        return new FiatShamirContext(_sid, _myId, _theirId, c1, c2);
+    }
+
+    private FiatShamirContext VerifyContext()
+    {
+        var (c1, c2) = CryptoUtil.CanonicalOrder(_myCommitment, _theirCommitment!);
+        return new FiatShamirContext(_sid, _theirId, _myId, c1, c2);
+    }
+
+    private void VerifyProof(byte[][] doubleBlinded, CpProof proof)
+    {
+        if (doubleBlinded.Length != _n)
+            throw new InvalidOperationException($"Expected {_n} double-blinded points");
+        if (!ChaumPedersen.Verify(_blindedPoints, doubleBlinded, proof, VerifyContext()))
+            throw new InvalidOperationException("Consistency proof verification failed");
+    }
+
+    private (byte[][] doubled, CpProof proof) DoubleBlindAndProve(byte[][] theirPoints)
+    {
+        var doubled = new byte[_n][];
+        for (int i = 0; i < _n; i++)
+            doubled[i] = Ristretto255.ScalarMul(theirPoints[i], _key);
+
+        var proof = ChaumPedersen.Prove(theirPoints, doubled, _key, ProveContext());
+        return (doubled, proof);
+    }
+
+    // ── Protocol methods ─────────────────────────────────────────
 
     public ProcessBlindedSetResponse ProcessBlindedSet(BlindedSetMsg msg)
     {
-        var theirPoints = msg.Points.Select(Ristretto255.HexToPoint).ToArray();
-        var theirNonce  = Convert.FromHexString(msg.Nonce);
+        VerifyCommitment(msg.Points, msg.Nonce);
+        _theirBlinded = msg.Points;
 
-        if (!CryptoUtil.VerifyCommit(theirPoints, theirNonce, _theirCommitment!))
-            throw new InvalidOperationException("Commitment verification failed");
-        if (theirPoints.Length != _n)
-            throw new InvalidOperationException($"Expected {_n} points, got {theirPoints.Length}");
-
-        _theirBlinded = theirPoints;
-
-        var doubled = theirPoints.Select(p => Ristretto255.ScalarMul(p, _key)).ToArray();
-        var proof   = ChaumPedersen.Prove(theirPoints, doubled, _key);
-        var shuffled = CryptoUtil.SecureShuffle(doubled);
-        _theirDoubleBlinded = shuffled;
+        var (doubled, proof) = DoubleBlindAndProve(msg.Points);
+        _theirDoubleBlinded = doubled;
 
         return new ProcessBlindedSetResponse(
-            doubled.Select(Ristretto255.PointToHex).ToArray(),
-            shuffled.Select(Ristretto255.PointToHex).ToArray(),
-            new ProofMsg(Ristretto255.PointToHex(proof.C), Ristretto255.PointToHex(proof.S)),
-            _blindedPoints.Select(Ristretto255.PointToHex).ToArray(),
-            Convert.ToHexString(_commitNonce));
+            doubled, proof, _blindedPoints, _commitNonce);
     }
 
     public ProcessResponseResult ProcessResponse(ProcessBlindedSetResponse msg)
     {
-        var theirPoints = msg.MyPoints.Select(Ristretto255.HexToPoint).ToArray();
-        var theirNonce  = Convert.FromHexString(msg.MyNonce);
+        VerifyCommitment(msg.MyPoints, msg.MyNonce);
 
-        if (!CryptoUtil.VerifyCommit(theirPoints, theirNonce, _theirCommitment!))
-            throw new InvalidOperationException("Commitment verification failed");
-        if (theirPoints.Length != _n)
-            throw new InvalidOperationException($"Expected {_n} points, got {theirPoints.Length}");
+        VerifyProof(msg.DoubleBlinded, msg.Proof);
 
-        var orderedDoubled = msg.OrderedDoubleBlinded.Select(Ristretto255.HexToPoint).ToArray();
-        var shuffledDoubled = msg.DoubleBlinded.Select(Ristretto255.HexToPoint).ToArray();
-        var proof = new CpProof(
-            Ristretto255.HexToPoint(msg.Proof.C),
-            Ristretto255.HexToPoint(msg.Proof.S));
+        _theirBlinded    = msg.MyPoints;
+        _myDoubleBlinded = msg.DoubleBlinded;
 
-        if (orderedDoubled.Length != _n || shuffledDoubled.Length != _n)
-            throw new InvalidOperationException($"Expected {_n} double-blinded points");
-        if (!ChaumPedersen.Verify(_blindedPoints, orderedDoubled, proof))
-            throw new InvalidOperationException("Consistency proof verification failed");
-        if (!CryptoUtil.VerifyShuffleMultiset(orderedDoubled, shuffledDoubled))
-            throw new InvalidOperationException("Multiset shuffle verification failed");
+        var (doubled, proof) = DoubleBlindAndProve(msg.MyPoints);
+        _theirDoubleBlinded = doubled;
 
-        _theirBlinded   = theirPoints;
-        _myDoubleBlinded = orderedDoubled;
-
-        var theirDoubled = theirPoints.Select(p => Ristretto255.ScalarMul(p, _key)).ToArray();
-        var myProof      = ChaumPedersen.Prove(theirPoints, theirDoubled, _key);
-        var myShuffled   = CryptoUtil.SecureShuffle(theirDoubled);
-        _theirDoubleBlinded = myShuffled;
-
-        return new ProcessResponseResult(
-            theirDoubled.Select(Ristretto255.PointToHex).ToArray(),
-            myShuffled.Select(Ristretto255.PointToHex).ToArray(),
-            new ProofMsg(Ristretto255.PointToHex(myProof.C), Ristretto255.PointToHex(myProof.S)));
+        return new ProcessResponseResult(doubled, proof);
     }
 
     public void ProcessFinal(ProcessResponseResult msg)
     {
-        var orderedDoubled  = msg.OrderedDoubleBlinded.Select(Ristretto255.HexToPoint).ToArray();
-        var shuffledDoubled = msg.DoubleBlinded.Select(Ristretto255.HexToPoint).ToArray();
-        var proof = new CpProof(
-            Ristretto255.HexToPoint(msg.Proof.C),
-            Ristretto255.HexToPoint(msg.Proof.S));
-
-        if (orderedDoubled.Length != _n || shuffledDoubled.Length != _n)
-            throw new InvalidOperationException($"Expected {_n} double-blinded points");
-        if (!ChaumPedersen.Verify(_blindedPoints, orderedDoubled, proof))
-            throw new InvalidOperationException("Consistency proof verification failed");
-        if (!CryptoUtil.VerifyShuffleMultiset(orderedDoubled, shuffledDoubled))
-            throw new InvalidOperationException("Multiset shuffle verification failed");
-
-        _myDoubleBlinded = orderedDoubled;
+        VerifyProof(msg.DoubleBlinded, msg.Proof);
+        _myDoubleBlinded = msg.DoubleBlinded;
     }
+
+    // ── Intersection computation ─────────────────────────────────
 
     public string[] Intersection()
     {
         if (_myDoubleBlinded == null || _theirDoubleBlinded == null)
             throw new InvalidOperationException("Protocol not complete");
 
-        var mySet        = new HashSet<string>(_myDoubleBlinded.Select(Ristretto255.PointToHex));
-        var matchingHexes = new HashSet<string>(
-            _theirDoubleBlinded.Select(Ristretto255.PointToHex).Where(h => mySet.Contains(h)));
+        var theirSet = new HashSet<string>(_n);
+        for (int i = 0; i < _theirDoubleBlinded.Length; i++)
+            theirSet.Add(Ristretto255.PointToHex(_theirDoubleBlinded[i]));
 
         var result = new List<string>();
         for (int i = 0; i < _blindedPoints.Length; i++)
         {
             var dbHex = Ristretto255.PointToHex(_myDoubleBlinded[i]);
-            if (matchingHexes.Contains(dbHex))
-            {
-                var bpHex = Ristretto255.PointToHex(_blindedPoints[i]);
-                if (_myBlindedMap.TryGetValue(bpHex, out var element) && !element.StartsWith(DummyTag))
-                    result.Add(element);
-            }
+            if (!theirSet.Contains(dbHex)) continue;
+
+            var bpHex = Ristretto255.PointToHex(_blindedPoints[i]);
+            if (_myBlindedMap.TryGetValue(bpHex, out var element) && !element.StartsWith(DummyTag))
+                result.Add(element);
         }
         return result.ToArray();
     }
 
-    public static (string[] Alice, string[] Bob) RunProtocol(string[] setA, string[] setB, int n = DefaultN)
+    // ── In-process protocol execution ────────────────────────────
+
+    public static (string[] Alice, string[] Bob) RunProtocol(
+        string[] setA, string[] setB, int n = DefaultN,
+        byte[]? sid = null, string idA = "party_a", string idB = "party_b")
     {
-        var alice = new PsiSession(setA, n);
-        var bob   = new PsiSession(setB, n);
+        var sessionSid = sid ?? CryptoUtil.GetRandomBytes(16);
+        var alice = new PsiSession(setA, sessionSid, idA, idB, n);
+        var bob   = new PsiSession(setB, sessionSid, idB, idA, n);
 
-        var cA = alice.Commitment();
-        var cB = bob.Commitment();
-        alice.ReceiveCommitment(cB);
-        bob.ReceiveCommitment(cA);
+        alice.ReceiveCommitment(bob.Commitment());
+        bob.ReceiveCommitment(alice.Commitment());
 
-        var msgA1 = alice.BlindedSet();
-        var msgB1 = bob.ProcessBlindedSet(msgA1);
+        var msgB1 = bob.ProcessBlindedSet(alice.BlindedSet());
         var msgA2 = alice.ProcessResponse(msgB1);
         bob.ProcessFinal(msgA2);
 

@@ -23,7 +23,7 @@ A small domain creates a significant enumeration risk: a malicious party could f
 
 ### 1.2 Prior Work
 
-This protocol builds on established techniques from the PSI literature. The foundational commutative-encryption approach was introduced by Huberman, Franklin, and Hogg (1999) and formalized by Freedman, Nissim, and Pinkas (EUROCRYPT 2004). The size-hiding variant (SHI-PSI) was first proposed by Ateniese, De Cristofaro, and Tsudik (PKC 2011), who demonstrated that hiding client set sizes incurs minimal overhead. The zero-knowledge proof techniques for malicious security draw from Chaum-Pedersen (1992) discrete-log equality proofs and Schnorr (1991) signatures of knowledge.
+This protocol builds on established techniques from the PSI literature. The foundational commutative-encryption approach was introduced by Huberman, Franklin, and Hogg (1999) and formalized by Freedman, Nissim, and Pinkas (EUROCRYPT 2004). De Cristofaro and Tsudik (FC 2010) refined this into a practical protocol with linear complexity, establishing the performance baseline that subsequent work builds on. The size-hiding variant (SHI-PSI) was first proposed by Ateniese, De Cristofaro, and Tsudik (PKC 2011), who demonstrated that hiding client set sizes incurs minimal overhead. The zero-knowledge proof techniques for malicious security draw from Chaum-Pedersen (1992) discrete-log equality proofs and Schnorr (1991) signatures of knowledge.
 
 ### 1.3 Notation
 
@@ -38,7 +38,8 @@ This protocol builds on established techniques from the PSI literature. The foun
 | `a, b ∈ Z_q` | Secret blinding keys chosen uniformly at random by Party A and Party B |
 | `Com(x; r)` | A Pedersen commitment to value x with randomness r |
 | `π_DL` | A zero-knowledge proof of discrete log equality (Chaum-Pedersen proof) |
-| `π_Shuf` | A zero-knowledge proof of correct shuffle (permutation proof) |
+| `sid` | Unique session identifier for a protocol execution (random 128-bit nonce) |
+| `id_A, id_B` | Stable identifiers for Party A and Party B |
 | `λ` | Security parameter (e.g. 128 bits) |
 
 ---
@@ -69,6 +70,8 @@ We assume the adversary is computationally bounded (probabilistic polynomial tim
 ### 2.3 What Is Not Protected
 
 The protocol does not hide the size of the intersection itself. Both parties learn how many elements they share. If hiding the intersection size is required, a PSI-Cardinality (PSI-CA) variant should be considered instead.
+
+**Fairness is not guaranteed.** Due to the sequential message flow, Party A learns the intersection after receiving message 4 but before sending message 5. A malicious Party A can therefore inspect the result and selectively abort — completing the protocol when the outcome is favorable and withholding message 5 otherwise, denying Party B any output. This is a fundamental limitation of two-party computation without honest majority (Cleve, 1986) and cannot be fully eliminated. Deployments should treat a missing message 5 as a protocol failure and log it for operational monitoring. Partial mitigations such as timed commitment release or optimistic fair exchange require additional infrastructure and are outside the scope of this protocol.
 
 **Enumeration attacks are inherent to any PSI protocol.** A malicious party can choose its input set to be a dictionary of guessed values rather than its real secrets. Because blinded elements are cryptographically indistinguishable from one another, the honest party cannot detect whether the other side submitted real secrets or dictionary entries. This is not a flaw in the protocol — it is a fundamental property of private set intersection. Any protocol that hides set contents must also hide whether those contents are "real."
 
@@ -107,27 +110,17 @@ The protocol proceeds as follows (using Fiat-Shamir heuristic for non-interactiv
 **Prover** (knows secret k):
 
   a) For each i, choose random v_i, compute R_i = v_i · P_i.
-  b) Compute challenge: c = Hash(P_1, Q_1, R_1, ..., P_N, Q_N, R_N).
+  b) Compute challenge: c = Hash("CP_proof" || sid || id_prover || id_verifier || C_A || C_B || P_1 || Q_1 || R_1 || ... || P_N || Q_N || R_N), where sid is the unique session identifier and C_A, C_B are the commitments from Phase 1. The domain separator "CP_proof" and the session context prevent cross-session and cross-party proof replay.
   c) Compute response: s_i = v_i - c · k (mod q) for each i.
   d) Send π = (c, {s_i}).
 
 **Verifier:**
 
   a) For each i, compute R'_i = s_i · P_i + c · Q_i.
-  b) Compute c' = Hash(P_1, Q_1, R'_1, ..., P_N, Q_N, R'_N).
+  b) Recompute c' using the same context-bound hash as the prover.
   c) Accept if and only if c = c'.
 
-**Batch optimization:** For efficiency, use a single random linear combination. Choose random weights w_1, ..., w_N and prove that Σ w_i · Q_i = k · (Σ w_i · P_i). This reduces the proof to a single Chaum-Pedersen instance with soundness error 1/q, which is negligible.
-
-### 3.5 Verifiable Shuffle
-
-After double-blinding, each party must shuffle (randomly permute) the set of elements before returning them. The shuffle must be verifiable: the shuffling party proves that the output is a permutation of the input (no elements added, removed, or modified), without revealing the permutation itself.
-
-For small sets (N < 1000), we recommend a simple approach:
-
-**Commitment-based shuffle proof:** The shuffling party commits to the permutation σ using a permutation matrix encoded as commitments. They then prove in zero knowledge that the matrix represents a valid permutation and that applying it to the input yields the output. This has O(N) proof size and O(N) verification time.
-
-**Alternative (simpler, slightly less efficient):** Instead of proving the shuffle directly, the party can commit to the sorted output. Since comparing multisets is equivalent to comparing sorted sets, both parties can independently verify that the multiset of double-blinded elements is consistent with the commitment, without needing a full shuffle proof. This works because the final comparison step only needs multiset equality, not ordered equality.
+**Batch optimization:** For efficiency, use a single random linear combination. Derive deterministic weights w_1, ..., w_N via Fiat-Shamir: compute w_i = Hash("CP_batch_weight" || sid || C_A || C_B || P_1 || Q_1 || ... || P_N || Q_N || i). The weights must not be chosen by the prover, as prover-chosen weights allow a cheating prover to cancel inconsistencies in the weighted sum. Prove that Σ w_i · Q_i = k · (Σ w_i · P_i). This reduces the proof to a single Chaum-Pedersen instance with soundness error 1/q, which is negligible.
 
 ---
 
@@ -144,6 +137,8 @@ Before protocol execution, both parties agree on:
 | `N` | Pad-to size. |
 | `H` | Hash-to-curve function as specified in Section 3.2 |
 | `D` | The element domain (the universe from which real set elements are drawn) |
+| `sid` | A unique session identifier for this protocol execution (e.g., a random 128-bit nonce agreed upon or derived at session start). Must never be reused across executions. |
+| `id_A, id_B` | Stable identifiers for Party A and Party B (e.g., public keys or authenticated endpoint identifiers). Used in Fiat-Shamir transcript binding to prevent cross-party proof replay. |
 
 ### 4.2 Phase 0: Initialization
 
@@ -156,7 +151,7 @@ Each party independently prepares their input.
 3. Form the padded set S'_A = {x_1, ..., x_m, d_1, ..., d_{N-m}} of exactly N elements.
 4. Sample secret blinding key a ← Z_q uniformly at random.
 5. Compute the blinded set: for each element e ∈ S'_A, compute P_e = a · H(e).
-6. Randomly permute the blinded set to obtain T_A = σ_A({P_e}).
+6. Randomly permute the blinded set to obtain T_A = σ_A({P_e}). (This local permutation prevents the ordering of T_A from revealing which positions hold real elements and which hold dummies. It requires no proof since the permutation is not communicated.)
 
 **Party B:** Performs the identical procedure with their set S_B and blinding key b to produce T_B.
 
@@ -182,35 +177,33 @@ This is the core phase where elements are double-blinded.
 
 **Step 2b — B double-blinds A's set and sends own set:**
 
-1. Party B computes the double-blinded set: for each P ∈ T_A, compute Q = b · P = ab · H(e).
-2. Party B generates zero-knowledge proof π_B proving consistent exponentiation: that the same scalar b was applied to every element of T_A (see Section 3.4).
-3. Party B randomly permutes the double-blinded set to obtain U_AB = σ'_B({Q}).
-4. Party B opens commitment C_B by sending (T_B, r_B) to Party A, along with U_AB and π_B.
+1. Party B computes the double-blinded set: for each P ∈ T_A, compute Q = b · P = ab · H(e). Let U_AB denote this sequence of double-blinded points (preserving the order of T_A).
+2. Party B generates zero-knowledge proof π_B proving consistent exponentiation: that the same scalar b was applied to every element of T_A to produce U_AB (see Section 3.4).
+3. Party B opens commitment C_B by sending (T_B, r_B) to Party A, along with U_AB and π_B.
 
 **Step 2c — A verifies and double-blinds B's set:**
 
 1. Party A verifies that Com(T_B; r_B) = C_B. If verification fails, abort.
 2. Party A verifies that |T_B| = N and |U_AB| = N. If not, abort.
-3. Party A verifies π_B. If verification fails, abort.
-4. Party A verifies that the multiset of U_AB is consistent with b applied to T_A (the proof π_B covers this).
-5. Party A computes the double-blinded set of B's elements: for each P ∈ T_B, compute Q = a · P = ba · H(e).
-6. Party A generates π_A proving consistent exponentiation with scalar a.
-7. Party A randomly permutes to obtain U_BA = σ'_A({Q}).
-8. Party A sends U_BA and π_A to Party B.
+3. Party A verifies π_B against the ordered pair (T_A, U_AB). If verification fails, abort.
+4. Party A computes the double-blinded set of B's elements: for each P ∈ T_B, compute Q = a · P = ba · H(e). Let U_BA denote this sequence.
+5. Party A generates π_A proving consistent exponentiation with scalar a over (T_B, U_BA).
+6. Party A sends U_BA and π_A to Party B.
 
 **Step 2d — B verifies A's double-blinding:**
 
-1. Party B verifies π_A. If verification fails, abort.
+1. Party B verifies that |U_BA| = N. If not, abort.
+2. Party B verifies π_A against the ordered pair (T_B, U_BA). If verification fails, abort.
 
 ### 4.5 Phase 3: Intersection Computation
 
 Both parties now independently compute the intersection.
 
-**Party A holds:** U_AB (the double-blinded version of A's own elements, blinded by a then b, shuffled by B) and U_BA (the double-blinded version of B's elements, blinded by b then a, shuffled by A — A created this).
+**Party A holds:** U_AB (the double-blinded version of A's own elements, blinded by a then b, computed by B) and U_BA (the double-blinded version of B's elements, blinded by b then a, computed by A).
 
 **Key property:** For any element e, the value ab · H(e) = ba · H(e) because scalar multiplication is commutative in Z_q. Therefore, if element e appears in both S_A and S_B, the corresponding double-blinded point will appear in both U_AB and U_BA.
 
-**Computation:** Party A computes the multiset intersection I_A = U_AB ∩ U_BA. Each matching point corresponds to a shared element. Party A can identify which of their original elements are in the intersection by maintaining a mapping from double-blinded points back to original elements (this is possible because A knows a and can track the correspondence through B's shuffle by matching a · H(x_i) to its double-blinded form).
+**Computation:** Party A computes the multiset intersection I_A = U_AB ∩ U_BA. Each matching point corresponds to a shared element. Party A can identify which of their original elements are in the intersection by maintaining a mapping from their blinded elements to the double-blinded points: for each original element x_i, the double-blinded form is b · (a · H(x_i)), which appears at the same position in U_AB as a · H(x_i) appeared in T_A.
 
 **Party B** performs the identical computation using the same two sets (B has U_AB because B created it, and received U_BA from A).
 
@@ -227,8 +220,8 @@ Both parties now independently compute the intersection.
 | 1 | A | B | C_A (32 bytes: commitment to blinded set) |
 | 2 | B | A | C_B (32 bytes: commitment to blinded set) |
 | 3 | A | B | T_A (N × 32 bytes: blinded set), r_A (32 bytes: commitment randomness) |
-| 4 | B | A | T_B (N × 32 bytes), r_B (32 bytes), U_AB (N × 32 bytes: double-blinded A), π_B (proof) |
-| 5 | A | B | U_BA (N × 32 bytes: double-blinded B), π_A (proof) |
+| 4 | B | A | T_B (N × 32 bytes), r_B (32 bytes), U_AB (N × 32 bytes: double-blinded A), π_B (CP proof) |
+| 5 | A | B | U_BA (N × 32 bytes: double-blinded B), π_A (CP proof) |
 
 ### 5.2 Communication Complexity
 
@@ -272,6 +265,12 @@ Under the Decisional Diffie-Hellman (DDH) assumption in the Ristretto255 group a
 
 The indistinguishability of the simulation relies on DDH: random group elements are indistinguishable from properly double-blinded dummy/non-intersecting elements.
 
+### 6.2.1 Commitment Binding and Multiset-Hash Collisions
+
+The Pedersen commitment (Section 3.3) binds to the sum of blinded points, not to the individual elements. Two distinct multisets {P_1, ..., P_N} and {P'_1, ..., P'_N} with the same sum Σ P_i = Σ P'_i would produce identical commitments for the same randomness r. A malicious party that finds such a collision could commit to one set and open with another, violating input independence.
+
+Finding a collision requires discovering a non-trivial integer-coefficient relation among the blinded points {a · H(x) : x ∈ D ∪ D'}, which reduces to the discrete logarithm problem in the Ristretto255 group. Even though the domain D is small (|D| ≈ 100), the blinding key a is chosen by the committing party, so the relevant hardness assumption is that no polynomial-time adversary can find a non-trivial kernel element in the group generated by {H(x) : x ∈ D ∪ D'}. Under the discrete log assumption in a prime-order group of order ~2^252, this holds with overwhelming probability: the expected work to find a relation among N ≤ 100 random group elements is O(√q) ≈ 2^126, which exceeds the security parameter.
+
 ### 6.3 Enumeration Attack Analysis
 
 A malicious party could pad their set with a dictionary of likely values (rather than random dummies) to learn which elements the honest party holds. This section analyzes the threat in the context of this protocol's target deployment (domain |D| = 100, real sets of ~10 elements) and explains the chosen mitigation strategy.
@@ -284,7 +283,7 @@ The attack cannot be detected by the honest party. Blinded elements (whether der
 
 #### 6.3.2 Mitigation: Capping N well below |D|
 
-The primary defense is setting the pad-to parameter N much smaller than the domain size |D|. With N = 10 and |D| = 100:
+The primary defense is setting the pad-to parameter N much smaller than the domain size |D|, following the bounded size-hiding approach of Bradley, Faber, and Tsudik (SCN 2016) who showed that security can be maintained even when the pad-to size does not cover the full domain. With N = 10 and |D| = 100:
 
 - **Per-run exposure:** An attacker can probe at most N/|D| = 10% of the domain per execution. If the honest party holds 10 elements, the expected number of elements an attacker discovers per run is approximately 10 × (10/100) = 1.
 - **Runs to full enumeration:** An attacker needs at least ⌈|D|/N⌉ = 10 protocol executions to cover the entire domain.
@@ -295,7 +294,8 @@ The primary defense is setting the pad-to parameter N much smaller than the doma
 Capping N alone is insufficient if the protocol can be executed without restriction. Rate limiting is essential:
 
 - **One execution per party-pair per time window.** If the protocol is limited to a single execution between any two parties (or one per day/week), the attacker's enumeration is capped at N elements total.
-- **Session binding.** Each protocol execution should be bound to a unique session identifier. Parties must verify that they are not engaging in a replay of a previous session.
+- **Session binding.** Each protocol execution should be bound to a unique session identifier (the sid parameter). Parties must verify that they are not engaging in a replay of a previous session.
+- **Abort-rate monitoring.** Aborted protocol runs must count against the rate limit equally with completed runs. A selective-abort strategy (see Section 2.3) leaks one bit per attempt (abort vs. completion), and an attacker who can trigger unlimited aborts can use this as an oracle. Similarly, a party that observes repeated aborts from a counterparty should flag this as potentially adversarial.
 - **Operational monitoring.** In a deployment with multiple parties, a party that initiates an unusual number of protocol executions with different counterparties may be attempting to triangulate elements and should be flagged.
 
 ## 7. Implementation Guidance
@@ -320,79 +320,42 @@ These estimates assume a native constant-time scalar multiplication library (e.g
 - The hash-to-curve function must be implemented correctly per RFC 9380. An incorrect implementation can leak information about inputs.
 - Dummy elements must be generated from a domain provably disjoint from the real element domain D. A simple approach: prepend a fixed tag byte (e.g., 0xFF) to random bytes, while all real elements are prepended with 0x00.
 - The commitment scheme must use independent randomness for each protocol execution.
+- The blinding key (a or b) must be freshly sampled for every protocol execution. Reusing a blinding key across sessions causes the same blinded elements to appear in multiple transcripts, allowing a coalition of counterparties (or a single adversary using multiple identities) to correlate elements across sessions and break set privacy. Implementations should derive the blinding key from a per-session random seed and must never persist or cache it.
 - Abort immediately on any verification failure. Do not continue the protocol or provide detailed error messages that could leak information.
 
 ### 7.3 C# Proof-of-Concept Implementation
 
 This repository includes a C# proof-of-concept (`ShiPsi.cs`) targeting .NET 9.0 that implements the full protocol. All EC and scalar operations use libsodium via P/Invoke (`Sodium.Core` NuGet, libsodium 1.0.20+).
 
-**Differences from the specification:**
-
-| Aspect | Specification (Sections 3–4) | C# PoC |
-|--------|------------------------------|--------|
-| Shuffle proofs | Verifiable shuffle with ZK proof (Section 3.5) | Multiset hash check: membership and bijection proven, permutation not hidden (not ZK) |
-
-**Shuffle proof approach:** The implementation uses a multiset hash check rather than one-out-of-N membership proofs or the full Bayer-Groth ZK shuffle. All three are partial or full replacements for the spec's verifiable shuffle:
-
-| Approach | Membership | Bijection | ZK |
-|----------|------------|-----------|-----|
-| Multiset hash (implemented) | ✓ | ✓ | ✗ |
-| One-out-of-N membership proof | ✓ | ✗ | ✓ |
-| Bayer-Groth (spec) | ✓ | ✓ | ✓ |
-
-Multiset hash is preferred over one-out-of-N because bijection is the security-critical property: without it, a malicious party could map the same input element to multiple output positions, inflating or manipulating the intersection. One-out-of-N proofs are ZK but do not prevent this — each output passes its membership check independently. The missing ZK property in the multiset approach reveals only the shuffling party's internal permutation order, which has limited value to the verifier in this two-party setting.
-
-The check evaluates the characteristic polynomial of both sets at a Fiat-Shamir challenge `t = H("multiset_shuffle", ordered..., shuffled...)`: `∏(t − f(pᵢ)) = ∏(t − f(qⱼ))` over Z_L. Soundness error is N/L ≈ 2⁻²⁴⁸. The prover transmits both the ordered double-blinded set (used by the verifier to check the CP proof) and the shuffled set (used for intersection), adding N points to the message.
+The PoC now implements the full protocol as specified, including context-bound Fiat-Shamir transcripts (Section 3.4) with session ID, party identifiers, and both commitments bound into the Chaum-Pedersen proof challenge and batch weight derivation.
 
 **Architecture:**
 
 - `Ristretto255` — P/Invoke wrappers around libsodium: `ScalarMul`, `PointAdd`, `HashToPoint` (SHA-512 → `crypto_core_ristretto255_from_hash`), and encoding helpers. Points are 32-byte compressed Ristretto255 encodings.
-- `CryptoUtil` — SHA-256 hashing, hash-to-group, random scalar generation, Pedersen commitments, multiset shuffle verification, and secure shuffle.
+- `CryptoUtil` — SHA-256 hashing, hash-to-scalar, random byte generation, Pedersen commitments, and Fisher-Yates secure shuffle (used for the local Phase 0 permutation of blinded elements).
 - `ChaumPedersen` — Batched Chaum-Pedersen proof of consistent scalar multiplication. Derives deterministic weights via Fiat-Shamir; all EC and scalar operations go through `Ristretto255`.
-- `PsiSession` — Full protocol state machine. Exposes `Commitment()`, `BlindedSet()`, `ProcessBlindedSet()`, `ProcessResponse()`, `ProcessFinal()`, and `Intersection()` matching the phases in Section 4.
+- `PsiSession` — Full protocol state machine. Constructed with the input set, a session ID (`sid`), party identifiers (`myId`, `theirId`), and the pad-to size N. Exposes `Commitment()`, `BlindedSet()`, `ProcessBlindedSet()`, `ProcessResponse()`, `ProcessFinal()`, and `Intersection()` matching the phases in Section 4. The session ID and party identifiers are threaded into all Chaum-Pedersen proofs via `FiatShamirContext`.
 
 **Performance (N = 10, measured on desktop hardware):**
 
 | Metric | Value |
 |--------|-------|
 | Full protocol (two parties, local) | ~60 ms |
-| Communication (serialized hex) | ~14 KB (hex-encoded; ~1.4 KB if binary) |
+| Communication (binary) | ~7 KB |
 
-**To harden for production:** add verifiable shuffle proofs (Bayer-Groth) to achieve full ZK on the permutation, and audit the P/Invoke boundary for any memory-safety or timing issues introduced at the C#/native interface.
+The legacy post-double-blinding shuffle and multiset hash verification code paths (developed against an earlier version of this specification) have been removed, reducing both computation and message size relative to earlier PoC builds.
 
----
-
-## 8. Extensions and Variants
-
-### 8.1 PSI-Cardinality (PSI-CA)
-
-If parties should learn only the number of shared elements (not which elements are shared), the protocol can be modified. Instead of revealing the double-blinded sets, each party commits to their set and both engage in a secure cardinality computation over the committed double-blinded values. This can be achieved using an oblivious PRF and a counting protocol.
-
-### 8.2 Updatable PSI
-
-If the parties' sets change over time and they wish to recompute the intersection without re-running the full protocol, an updatable variant can be used. Recent work (Liu et al., 2026) demonstrates that updatable PSI can be built from mostly symmetric-key primitives, with costs proportional only to the number of changed elements. Integrating size-hiding into updatable PSI remains an active research area.
-
-### 8.3 Multi-Party Extension
-
-This protocol is specified for two parties. Extension to n parties requires a different approach, such as the OPPRF-based multi-party PSI of Kolesnikov et al. (CCS 2017), combined with size-hiding techniques from Zhan et al. (2023) using Bloom filters and threshold homomorphic encryption. The complexity grows significantly with the number of parties.
-
-### 8.4 Threshold PSI
-
-A threshold variant reveals the intersection only if its cardinality exceeds a minimum threshold t. This prevents information leakage when the intersection is very small (and thus potentially identifying). This can be implemented by adding a secure comparison sub-protocol after the cardinality computation step.
+**To harden for production:** audit the P/Invoke boundary for any memory-safety or timing issues introduced at the C#/native interface.
 
 ---
 
-## 9. References
+## 8. References
 
 - **[ACT11]** G. Ateniese, E. De Cristofaro, G. Tsudik. "(If) Size Matters: Size-Hiding Private Set Intersection." PKC 2011.
 - **[BTF16]** T. Bradley, S. Faber, G. Tsudik. "Bounded Size-Hiding Private Set Intersection." SCN 2016.
 - **[CP92]** D. Chaum, T. Pedersen. "Wallet Databases with Observers." CRYPTO 1992.
 - **[DCT10]** E. De Cristofaro, G. Tsudik. "Practical Private Set Intersection Protocols with Linear Complexity." FC 2010.
-- **[FM25]** F. Falzon, E.A. Markatou. "Re-visiting Authorized Private Set Intersection: A New Privacy-Preserving Variant and Two Protocols." PoPETS 2025.
 - **[FNP04]** M. Freedman, K. Nissim, B. Pinkas. "Efficient Private Matching and Set Intersection." EUROCRYPT 2004.
 - **[HFH99]** B. Huberman, M. Franklin, T. Hogg. "Enhancing Privacy and Trust in Electronic Communities." ACM EC 1999.
-- **[KKRT17]** V. Kolesnikov, R. Kumaresan, M. Rosulek, N. Trieu. "Efficient Batched Oblivious PRF with Applications to Private Set Intersection." CCS 2017.
-- **[LMR+26]** J. Liu, P. Miao, M. Rosulek, X. Shi, J. Wang. "Updatable Private Set Intersection from Symmetric-Key Techniques." ePrint 2026/438.
 - **[RFC9380]** IRTF CFRG. "Hashing to Elliptic Curves." RFC 9380, 2023.
 - **[Sch91]** C. Schnorr. "Efficient Signature Generation by Smart Cards." Journal of Cryptology, 1991.
-- **[ZZL+23]** Y. Zhan, Z. Zhang, Q. Liu et al. "Hiding the Input-Size in Multi-Party Private Set Intersection." Designs, Codes and Cryptography, 2023.
