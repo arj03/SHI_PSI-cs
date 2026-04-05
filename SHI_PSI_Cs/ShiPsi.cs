@@ -189,10 +189,17 @@ public static class CryptoUtil
 
     public static byte[] Commit(byte[][] elements, byte[] nonce)
     {
-        var result = Ristretto255.ScalarMul(PedersenH, nonce);
-        for (int i = 0; i < elements.Length; i++)
-            result = Ristretto255.PointAdd(result, elements[i]);
-        return result;
+        var rH = Ristretto255.ScalarMul(PedersenH, nonce);
+        if (elements.Length == 0) return rH;
+
+        var lockObj = new object();
+        byte[]? sum = null;
+        Parallel.For(0, elements.Length,
+            () => (byte[]?)null,
+            (i, _, local) => local is null ? elements[i] : Ristretto255.PointAdd(local, elements[i]),
+            local => { lock (lockObj) { sum = sum is null ? local! : Ristretto255.PointAdd(sum, local!); } });
+
+        return Ristretto255.PointAdd(rH, sum!);
     }
 
     public static bool VerifyCommit(byte[][] elements, byte[] nonce, byte[] expected) =>
@@ -276,14 +283,23 @@ public static class ChaumPedersen
             As[i] = Ristretto255.ScalarMul(inputs[i], weights[i]);
             Bs[i] = Ristretto255.ScalarMul(outputs[i], weights[i]);
         });
-        var A = As[0];
-        var B = Bs[0];
-        for (int i = 1; i < n; i++)
-        {
-            A = Ristretto255.PointAdd(A, As[i]);
-            B = Ristretto255.PointAdd(B, Bs[i]);
-        }
-        return (A, B);
+        var lockObj = new object();
+        byte[]? A = null, B = null;
+        Parallel.For(0, n,
+            () => ((byte[]?)null, (byte[]?)null),
+            (i, _, local) => (
+                local.Item1 is null ? As[i] : Ristretto255.PointAdd(local.Item1, As[i]),
+                local.Item2 is null ? Bs[i] : Ristretto255.PointAdd(local.Item2, Bs[i])
+            ),
+            local =>
+            {
+                lock (lockObj)
+                {
+                    A = A is null ? local.Item1 : Ristretto255.PointAdd(A, local.Item1!);
+                    B = B is null ? local.Item2 : Ristretto255.PointAdd(B, local.Item2!);
+                }
+            });
+        return (A!, B!);
     }
 
     private static byte[] ChallengeHash(

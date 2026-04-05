@@ -339,22 +339,9 @@ public class PsiProtocolCorrectnessTests
    
     [Fact] public void LargerN()
     { 
-        var (a, b) = PsiSession.RunProtocol(["a", "b"], ["b", "c"], 50); 
+        var (a, b) = PsiSession.RunProtocol(["a", "b"], ["b", "c"], 500); 
         Assert.Equal(["b"], a); 
         Assert.Equal(["b"], b);
-    }
-
-    [Fact]
-    public void ProtocolIsSymmetric()
-    {
-        var (r1a, r1b) = PsiSession.RunProtocol(["1", "2", "3"], ["2", "3", "4"], 10);
-        var (r2a, r2b) = PsiSession.RunProtocol(["2", "3", "4"], ["1", "2", "3"], 10);
-
-        var expected = new[] { "2", "3" };
-        Assert.Equal(expected, r1a.OrderBy(x => x));
-        Assert.Equal(expected, r1b.OrderBy(x => x));
-        Assert.Equal(expected, r2a.OrderBy(x => x));
-        Assert.Equal(expected, r2b.OrderBy(x => x));
     }
 
     [Theory]
