@@ -1,6 +1,6 @@
 ﻿# Size-Hiding Private Set Intersection with Malicious Security
 
-**Mutual Two-Party Variant for Small Sets and Small Domains**
+**Mutual Two-Party Variant for Small Sets with special focus on small domains**
 
 ---
 
@@ -23,7 +23,7 @@ A small domain creates a significant enumeration risk: a malicious party could f
 
 ### 1.2 Prior Work
 
-This protocol builds on established techniques from the PSI literature. The foundational commutative-encryption approach was introduced by Huberman, Franklin, and Hogg (1999) and formalized by Freedman, Nissim, and Pinkas (EUROCRYPT 2004). De Cristofaro and Tsudik (FC 2010) refined this into a practical protocol with linear complexity, establishing the performance baseline that subsequent work builds on. The size-hiding variant (SHI-PSI) was first proposed by Ateniese, De Cristofaro, and Tsudik (PKC 2011), who demonstrated that hiding client set sizes incurs minimal overhead. The zero-knowledge proof techniques for malicious security draw from Chaum-Pedersen (1992) discrete-log equality proofs and Schnorr (1991) signatures of knowledge.
+This protocol builds on established techniques from the PSI literature. The foundational commutative-encryption approach was introduced by Huberman, Franklin, and Hogg (HFH99) and formalized by Freedman, Nissim, and Pinkas (FNP04). De Cristofaro and Tsudik (DCT10) refined this into a practical protocol with linear complexity, establishing the performance baseline that subsequent work builds on. The size-hiding variant (SHI-PSI) was first proposed by Ateniese, De Cristofaro, and Tsudik (ACT11), who demonstrated that hiding client set sizes incurs minimal overhead. The zero-knowledge proof techniques for malicious security draw from Chaum-Pedersen (CP92) discrete-log equality proofs and Schnorr (SCH91) signatures of knowledge.
 
 ### 1.3 Notation
 
@@ -68,8 +68,6 @@ We assume the adversary is computationally bounded (probabilistic polynomial tim
 **Correctness.** If both parties follow the protocol honestly, both learn exactly S_A ∩ S_B and nothing else. The zero-knowledge proofs ensure that a malicious party cannot cause the honest party to compute an incorrect result (except by choosing a different input set before the protocol begins).
 
 ### 2.3 What Is Not Protected
-
-The protocol does not hide the size of the intersection itself. Both parties learn how many elements they share. If hiding the intersection size is required, a PSI-Cardinality (PSI-CA) variant should be considered instead.
 
 **Fairness is not guaranteed.** Due to the sequential message flow, Party A learns the intersection after receiving message 4 but before sending message 5. A malicious Party A can therefore inspect the result and selectively abort — completing the protocol when the outcome is favorable and withholding message 5 otherwise, denying Party B any output. This is a fundamental limitation of two-party computation without honest majority (Cleve, 1986) and cannot be fully eliminated. Deployments should treat a missing message 5 as a protocol failure and log it for operational monitoring. Partial mitigations such as timed commitment release or optimistic fair exchange require additional infrastructure and are outside the scope of this protocol.
 
@@ -229,15 +227,7 @@ With Ristretto255 (32-byte points) and the batched Chaum-Pedersen proof, the tot
 
     Total ≈ 4 × N × 32 + O(λ) bytes
 
-For N = 10 and λ = 128, this is approximately 1.4 KB per party, or 2.8 KB total. This is trivially small for any network, including constrained links.
-
-### 5.3 Round Complexity
-
-The protocol requires 3 rounds of communication (5 messages total):
-
-- **Round 1:** Simultaneous commitment exchange (messages 1 and 2).
-- **Round 2:** A sends blinded set; B responds with double-blinded set, own blinded set, and proof (messages 3 and 4).
-- **Round 3:** A sends double-blinded set and proof (message 5).
+For N = 10 and λ = 128, this is approximately 1.4 KB per party, or 2.8 KB total.
 
 ---
 
@@ -298,22 +288,7 @@ Capping N alone is insufficient if the protocol can be executed without restrict
 - **Abort-rate monitoring.** Aborted protocol runs must count against the rate limit equally with completed runs. A selective-abort strategy (see Section 2.3) leaks one bit per attempt (abort vs. completion), and an attacker who can trigger unlimited aborts can use this as an oracle. Similarly, a party that observes repeated aborts from a counterparty should flag this as potentially adversarial.
 - **Operational monitoring.** In a deployment with multiple parties, a party that initiates an unusual number of protocol executions with different counterparties may be attempting to triangulate elements and should be flagged.
 
-## 7. Implementation Guidance
-
-### 7.1 Performance Estimates (N = 10)
-
-| Operation | Count | Est. Time |
-|-----------|-------|-----------|
-| Hash-to-curve (per party) | 10 | ~0.02 ms |
-| Scalar multiplication (blinding) | 20 | ~0.5 ms |
-| ZK proof generation (batched) | 1 | ~0.3 ms |
-| ZK proof verification (batched) | 1 | ~0.3 ms |
-| **Total per party** | — | **~1.2 ms** |
-| **Total communication** | — | **~2.8 KB** |
-
-These estimates assume a native constant-time scalar multiplication library (e.g., libsodium) on a modern x86_64 processor. The C# PoC uses libsodium via P/Invoke for all EC and scalar operations and measures approximately 60 ms per full two-party run (see Section 7.3). The dominant cost is EC scalar multiplication (~128 calls at ~0.18 ms each); scalar arithmetic is negligible. Approaching the sub-millisecond estimate above would require multi-scalar multiplication support, which libsodium's Ristretto255 API does not currently expose.
-
-### 7.2 Security Considerations for Implementers
+## 7. Security Considerations for Implementers
 
 - All scalar multiplications must be constant-time to prevent timing side-channel attacks.
 - Random number generation must use a cryptographically secure PRNG (e.g., /dev/urandom, getrandom(), or equivalent).
@@ -323,39 +298,13 @@ These estimates assume a native constant-time scalar multiplication library (e.g
 - The blinding key (a or b) must be freshly sampled for every protocol execution. Reusing a blinding key across sessions causes the same blinded elements to appear in multiple transcripts, allowing a coalition of counterparties (or a single adversary using multiple identities) to correlate elements across sessions and break set privacy. Implementations should derive the blinding key from a per-session random seed and must never persist or cache it.
 - Abort immediately on any verification failure. Do not continue the protocol or provide detailed error messages that could leak information.
 
-### 7.3 C# Proof-of-Concept Implementation
-
-This repository includes a C# proof-of-concept (`ShiPsi.cs`) targeting .NET 9.0 that implements the full protocol. All EC and scalar operations use libsodium via P/Invoke (`Sodium.Core` NuGet, libsodium 1.0.20+).
-
-The PoC now implements the full protocol as specified, including context-bound Fiat-Shamir transcripts (Section 3.4) with session ID, party identifiers, and both commitments bound into the Chaum-Pedersen proof challenge and batch weight derivation.
-
-**Architecture:**
-
-- `Ristretto255` — P/Invoke wrappers around libsodium: `ScalarMul`, `PointAdd`, `HashToPoint` (SHA-512 → `crypto_core_ristretto255_from_hash`), and encoding helpers. Points are 32-byte compressed Ristretto255 encodings.
-- `CryptoUtil` — SHA-256 hashing, hash-to-scalar, random byte generation, Pedersen commitments, and Fisher-Yates secure shuffle (used for the local Phase 0 permutation of blinded elements).
-- `ChaumPedersen` — Batched Chaum-Pedersen proof of consistent scalar multiplication. Derives deterministic weights via Fiat-Shamir; all EC and scalar operations go through `Ristretto255`.
-- `PsiSession` — Full protocol state machine. Constructed with the input set, a session ID (`sid`), party identifiers (`myId`, `theirId`), and the pad-to size N. Exposes `Commitment()`, `BlindedSet()`, `ProcessBlindedSet()`, `ProcessResponse()`, `ProcessFinal()`, and `Intersection()` matching the phases in Section 4. The session ID and party identifiers are threaded into all Chaum-Pedersen proofs via `FiatShamirContext`.
-
-**Performance (N = 10, measured on desktop hardware):**
-
-| Metric | Value |
-|--------|-------|
-| Full protocol (two parties, local) | ~60 ms |
-| Communication (binary) | ~7 KB |
-
-The legacy post-double-blinding shuffle and multiset hash verification code paths (developed against an earlier version of this specification) have been removed, reducing both computation and message size relative to earlier PoC builds.
-
-**To harden for production:** audit the P/Invoke boundary for any memory-safety or timing issues introduced at the C#/native interface.
-
----
-
 ## 8. References
 
-- **[ACT11]** G. Ateniese, E. De Cristofaro, G. Tsudik. "(If) Size Matters: Size-Hiding Private Set Intersection." PKC 2011.
-- **[BTF16]** T. Bradley, S. Faber, G. Tsudik. "Bounded Size-Hiding Private Set Intersection." SCN 2016.
-- **[CP92]** D. Chaum, T. Pedersen. "Wallet Databases with Observers." CRYPTO 1992.
-- **[DCT10]** E. De Cristofaro, G. Tsudik. "Practical Private Set Intersection Protocols with Linear Complexity." FC 2010.
-- **[FNP04]** M. Freedman, K. Nissim, B. Pinkas. "Efficient Private Matching and Set Intersection." EUROCRYPT 2004.
-- **[HFH99]** B. Huberman, M. Franklin, T. Hogg. "Enhancing Privacy and Trust in Electronic Communities." ACM EC 1999.
-- **[RFC9380]** IRTF CFRG. "Hashing to Elliptic Curves." RFC 9380, 2023.
-- **[Sch91]** C. Schnorr. "Efficient Signature Generation by Smart Cards." Journal of Cryptology, 1991.
+- **[ACT11]** G. Ateniese, E. De Cristofaro, G. Tsudik. "(If) Size Matters: Size-Hiding Private Set Intersection."
+- **[BTF16]** T. Bradley, S. Faber, G. Tsudik. "Bounded Size-Hiding Private Set Intersection."
+- **[CP92]** D. Chaum, T. Pedersen. "Wallet Databases with Observers."
+- **[DCT10]** E. De Cristofaro, G. Tsudik. "Practical Private Set Intersection Protocols with Linear Complexity."
+- **[FNP04]** M. Freedman, K. Nissim, B. Pinkas. "Efficient Private Matching and Set Intersection."
+- **[HFH99]** B. Huberman, M. Franklin, T. Hogg. "Enhancing Privacy and Trust in Electronic Communities."
+- **[RFC9380]** IRTF CFRG. "Hashing to Elliptic Curves."
+- **[SCH91]** C. Schnorr. "Efficient Signature Generation by Smart Cards."
