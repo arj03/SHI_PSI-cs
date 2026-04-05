@@ -12,14 +12,14 @@ This document specifies a cryptographic protocol for Private Set Intersection (P
 
 The protocol is designed for the following operational context:
 
-- **Domain size:** The universe of possible element values |D| is small (on the order of 100).
-- **Set scale:** Each party holds approximately 10 elements drawn from this domain.
+- **Domain size:** The universe of possible element values |D| may be arbitrarily large. When |D| is small, the reduced enumeration cost creates additional attack surface; the protocol includes specific countermeasures (described in Section 6) to mitigate this.
+- **Set scale:** Each party holds a small number of elements (fewer than 1000) drawn from this domain.
 - **Security model:** Malicious adversaries who may deviate arbitrarily from the protocol.
 - **Privacy goal:** Neither party learns the other party's set size or any elements outside the intersection.
 - **Output:** Mutual. Both parties learn the intersection.
 - **Architecture:** Strictly two-party. No trusted third party or certificate authority is involved at any stage.
 
-A small domain creates a significant enumeration risk: a malicious party could fill its input set with dictionary values to probe the honest party's elements. This protocol addresses that threat through a carefully chosen pad-to size N that is much smaller than the domain, combined with rate limiting on protocol executions. Section 6 provides a detailed analysis of this tradeoff.
+When the domain is small, a malicious party could fill its input set with dictionary values to systematically probe the honest party's elements. This protocol addresses that threat through a carefully chosen pad-to size N that is much smaller than the domain, combined with rate limiting on protocol executions. For large domains, enumeration is computationally infeasible regardless of N. Section 6 provides a detailed analysis of the small-domain tradeoff.
 
 ### 1.2 Prior Work
 
@@ -33,8 +33,8 @@ This protocol builds on established techniques from the PSI literature. The foun
 | `q` | The order of group G (a large prime, typically 256 bits) |
 | `H: {0,1}* → G` | A hash-to-curve function mapping arbitrary strings to group elements |
 | `S_A, S_B` | Private input sets of Party A and Party B respectively |
-| `N` | Public pad-to size parameter. Fixed at 10 for this deployment |
-| `\|D\|` | Size of the element domain (the universe of possible values; approximately 100) |
+| `N` | Public pad-to size parameter; both parties' blinded sets are padded to exactly N elements |
+| `\|D\|` | Size of the element domain (the universe of possible values; may be arbitrarily large) |
 | `a, b ∈ Z_q` | Secret blinding keys chosen uniformly at random by Party A and Party B |
 | `Com(x; r)` | A Pedersen commitment to value x with randomness r |
 | `π_DL` | A zero-knowledge proof of discrete log equality (Chaum-Pedersen proof) |
@@ -73,7 +73,7 @@ We assume the adversary is computationally bounded (probabilistic polynomial tim
 
 **Enumeration attacks are inherent to any PSI protocol.** A malicious party can choose its input set to be a dictionary of guessed values rather than its real secrets. Because blinded elements are cryptographically indistinguishable from one another, the honest party cannot detect whether the other side submitted real secrets or dictionary entries. This is not a flaw in the protocol — it is a fundamental property of private set intersection. Any protocol that hides set contents must also hide whether those contents are "real."
 
-In this protocol, the enumeration surface is bounded by the pad-to parameter N. With N = 10 and a domain of 100, a malicious party can probe at most 10% of the domain per protocol execution. See Section 6 for a full analysis of this tradeoff, the rationale for the chosen parameters, and why alternative approaches involving trusted third parties were rejected.
+In this protocol, the enumeration surface is bounded by the pad-to parameter N: a malicious party can probe at most N elements per protocol execution. For large domains this is a negligible fraction; for small domains the fraction N/|D| may be significant. See Section 6 for a full analysis of this tradeoff, parameter selection guidance, and why alternative approaches involving trusted third parties were rejected.
 
 ---
 
@@ -123,6 +123,37 @@ The protocol proceeds as follows (using Fiat-Shamir heuristic for non-interactiv
 ---
 
 ## 4. Protocol Specification
+
+```mermaid
+sequenceDiagram
+    participant A as Party A
+    participant B as Party B
+
+    Note over A,B: Phase 0 - Initialization (independent)
+    Note over A: Pad S_A to N, blind with key a, shuffle to get T_A
+    Note over A: Commit C_A = Com(T_A, r_A)
+    Note over B: Pad S_B to N, blind with key b, shuffle to get T_B
+    Note over B: Commit C_B = Com(T_B, r_B)
+
+    Note over A,B: Phase 1 - Commitment Exchange
+    A->>B: C_A
+    B->>A: C_B
+
+    Note over A,B: Phase 2 - Double-Blinding
+    A->>B: T_A, r_A
+    Note over B: Verify Com(T_A, r_A) = C_A
+    Note over B: Compute U_AB = b*T_A, generate proof pi_B
+    B->>A: T_B, r_B, U_AB, pi_B
+    Note over A: Verify Com(T_B, r_B) = C_B
+    Note over A: Verify pi_B over (T_A, U_AB)
+    Note over A: Compute U_BA = a*T_B, generate proof pi_A
+    A->>B: U_BA, pi_A
+    Note over B: Verify pi_A over (T_B, U_BA)
+
+    Note over A,B: Phase 3 - Intersection Computation
+    Note over A: Match U_AB and U_BA to recover S_A ∩ S_B
+    Note over B: Match U_AB and U_BA to recover S_A ∩ S_B
+```
 
 ### 4.1 Public Parameters
 
