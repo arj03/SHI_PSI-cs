@@ -21,7 +21,7 @@ internal static class T
                 new PsiSession(setB, s, "bob", "alice", n));
     }
 
-    internal static FiatShamirContext CpCtx() =>
+    internal static FiatShamirContext ProofCtx() =>
         new(Sid(), "prover", "verifier",
             Ristretto255.HashToPoint("commit_a"),
             Ristretto255.HashToPoint("commit_b"));
@@ -115,7 +115,7 @@ public class ChaumPedersenTests
     public void Prove_Verify_HonestExecution()
     {
         var k = Ristretto255.RandomScalar();
-        var ctx = T.CpCtx();
+        var ctx = T.ProofCtx();
         var inputs = new byte[5][];
         var outputs = new byte[5][];
         for (int i = 0; i < 5; i++)
@@ -133,7 +133,7 @@ public class ChaumPedersenTests
     {
         var k = Ristretto255.RandomScalar();
         var kWrong = Ristretto255.RandomScalar();
-        var ctx = T.CpCtx();
+        var ctx = T.ProofCtx();
         var inputs = new byte[3][];
         var outputs = new byte[3][];
         for (int i = 0; i < 3; i++)
@@ -150,7 +150,7 @@ public class ChaumPedersenTests
     public void Verify_RejectsTamperedOutput()
     {
         var k = Ristretto255.RandomScalar();
-        var ctx = T.CpCtx();
+        var ctx = T.ProofCtx();
         var inputs = new byte[4][];
         var outputs = new byte[4][];
         for (int i = 0; i < 4; i++)
@@ -171,7 +171,7 @@ public class ChaumPedersenTests
     public void Verify_RejectsSwappedInputOutputPair()
     {
         var k = Ristretto255.RandomScalar();
-        var ctx = T.CpCtx();
+        var ctx = T.ProofCtx();
         var inputs = new byte[3][];
         var outputs = new byte[3][];
         for (int i = 0; i < 3; i++)
@@ -192,7 +192,7 @@ public class ChaumPedersenTests
     public void Prove_Verify_SingleElement()
     {
         var k = Ristretto255.RandomScalar();
-        var ctx = T.CpCtx();
+        var ctx = T.ProofCtx();
         var inputs = new[] { Ristretto255.HashToPoint("single") };
         var outputs = new[] { Ristretto255.ScalarMul(inputs[0], k) };
 
@@ -204,7 +204,7 @@ public class ChaumPedersenTests
     public void Prove_Verify_LargeSet()
     {
         var k = Ristretto255.RandomScalar();
-        var ctx = T.CpCtx();
+        var ctx = T.ProofCtx();
         int n = 20;
         var inputs = new byte[n][];
         var outputs = new byte[n][];
@@ -223,7 +223,7 @@ public class ChaumPedersenTests
     {
         var k1 = Ristretto255.RandomScalar();
         var k2 = Ristretto255.RandomScalar();
-        var ctx = T.CpCtx();
+        var ctx = T.ProofCtx();
         var inputs = new byte[4][];
         var outputs = new byte[4][];
         for (int i = 0; i < 4; i++)
@@ -240,7 +240,7 @@ public class ChaumPedersenTests
     public void Proof_ContainsNonNullFields()
     {
         var k = Ristretto255.RandomScalar();
-        var ctx = T.CpCtx();
+        var ctx = T.ProofCtx();
         var inputs = new[] { Ristretto255.HashToPoint("nonnull") };
         var outputs = new[] { Ristretto255.ScalarMul(inputs[0], k) };
 
