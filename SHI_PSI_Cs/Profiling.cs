@@ -1,4 +1,4 @@
-// Profiling.cs — phase-by-phase timing for LargerN (N=500)
+// Profiling.cs — phase-by-phase timing for N=10 and N=500
 
 using System.Diagnostics;
 using Xunit;
