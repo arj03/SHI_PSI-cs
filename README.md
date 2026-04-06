@@ -107,16 +107,16 @@ The protocol proceeds as follows (using Fiat-Shamir heuristic for non-interactiv
 
 **Prover** (knows secret k):
 
-  a) For each i, choose random v_i, compute R_i = v_i · P_i.
-  b) Compute challenge: c = Hash("CP_proof" || sid || id_prover || id_verifier || C_A || C_B || P_1 || Q_1 || R_1 || ... || P_N || Q_N || R_N), where sid is the unique session identifier and C_A, C_B are the commitments from Phase 1. The domain separator "CP_proof" and the session context prevent cross-session and cross-party proof replay.
-  c) Compute response: s_i = v_i - c · k (mod q) for each i.
-  d) Send π = (c, {s_i}).
+1. For each i, choose random v_i, compute R_i = v_i · P_i.
+2. Compute challenge: c = Hash("CP_proof" || sid || id_prover || id_verifier || C_A || C_B || P_1 || Q_1 || R_1 || ... || P_N || Q_N || R_N), where sid is the unique session identifier and C_A, C_B are the commitments from Phase 1. The domain separator "CP_proof" and the session context prevent cross-session and cross-party proof replay.
+3. Compute response: s_i = v_i - c · k (mod q) for each i.
+4. Send π = (c, {s_i}).
 
 **Verifier:**
 
-  a) For each i, compute R'_i = s_i · P_i + c · Q_i.
-  b) Recompute c' using the same context-bound hash as the prover.
-  c) Accept if and only if c = c'.
+1. For each i, compute R'_i = s_i · P_i + c · Q_i.
+2. Recompute c' using the same context-bound hash as the prover.
+3. Accept if and only if c = c'.
 
 **Batch optimization:** For efficiency, use a single random linear combination. Derive deterministic weights w_1, ..., w_N via Fiat-Shamir: compute w_i = Hash("CP_batch_weight" || sid || C_A || C_B || P_1 || Q_1 || ... || P_N || Q_N || i). The weights must not be chosen by the prover, as prover-chosen weights allow a cheating prover to cancel inconsistencies in the weighted sum. Prove that Σ w_i · Q_i = k · (Σ w_i · P_i). This reduces the proof to a single Chaum-Pedersen instance with soundness error 1/q, which is negligible.
 
