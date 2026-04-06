@@ -319,9 +319,15 @@ Capping N alone is insufficient if the protocol can be executed without restrict
 - **Abort-rate monitoring.** Aborted protocol runs must count against the rate limit equally with completed runs. A selective-abort strategy (see Section 2.3) leaks one bit per attempt (abort vs. completion), and an attacker who can trigger unlimited aborts can use this as an oracle. Similarly, a party that observes repeated aborts from a counterparty should flag this as potentially adversarial.
 - **Operational monitoring.** In a deployment with multiple parties, a party that initiates an unusual number of protocol executions with different counterparties may be attempting to triangulate elements and should be flagged.
 
-## 7. Security Considerations for Implementers
+## 7. Notes for implementers
 
-- All scalar multiplications must be constant-time to prevent timing side-channel attacks.
+### 7.1 Proof of concept
+
+This repo contains a proof of concept implementation in 550 total lines, 410 lines of code. It can run both sides of the protocol in ~20ms for N=10 and ~200ms for N=500.
+
+### 7.2 Security Considerations for implementers
+
+- - All scalar multiplications must be constant-time to prevent timing side-channel attacks.
 - Random number generation must use a cryptographically secure PRNG (e.g., /dev/urandom, getrandom(), or equivalent).
 - The hash-to-curve function must be implemented correctly per RFC 9380. An incorrect implementation can leak information about inputs.
 - Dummy elements must be generated from a domain provably disjoint from the real element domain D. A simple approach: prepend a fixed tag byte (e.g., 0xFF) to random bytes, while all real elements are prepended with 0x00.
