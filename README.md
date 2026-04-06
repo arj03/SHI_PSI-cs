@@ -256,9 +256,9 @@ Both parties now independently compute the intersection.
 
 With Ristretto255 (32-byte points) and the batched Chaum-Pedersen proof, the total communication per party is approximately:
 
-    Total ≈ 4 × N × 32 + O(λ) bytes
+    Total ≈ 4 × N × 32 + 64 bytes
 
-For N = 10 and λ = 128, this is approximately 1.4 KB per party, or 2.8 KB total.
+where the 64-byte term is the batched CP proof (one 32-byte scalar challenge + one 32-byte scalar response). For N = 10, this is approximately 1.3 KB per party, or 2.6 KB total.
 
 ---
 
