@@ -27,7 +27,7 @@ public class PsiSession
     private readonly byte[][] _blindedPoints;
     private readonly byte[] _commitNonce;
     private readonly byte[] _myCommitment;
-    private readonly Dictionary<string, string> _myBlindedMap = new();
+    private readonly Dictionary<string, string> _myBlindedMap = [];
 
     // Fiat-Shamir transcript binding (Section 3.4)
     private readonly byte[] _sid;

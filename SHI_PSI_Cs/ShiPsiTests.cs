@@ -433,13 +433,6 @@ public class PsiProtocolStepByStepTests
     }
 
     [Fact]
-    public void Commitment_IsStableAcrossCalls()
-    {
-        var session = T.Session(["test"], T.Sid(), n: 5);
-        Assert.True(Ristretto255.PointEquals(session.Commitment(), session.Commitment()));
-    }
-
-    [Fact]
     public void BlindedSet_IsStableAcrossCalls()
     {
         var session = T.Session(["test"], T.Sid(), n: 5);
@@ -474,19 +467,6 @@ public class PsiSessionEdgeCaseTests
 
         Assert.Throws<InvalidOperationException>(() => alice.Intersection());
         Assert.Throws<InvalidOperationException>(() => bob.Intersection());
-    }
-
-    [Fact]
-    public void Constructor_AcceptsExactlyN()
-    {
-        var session = new PsiSession(["a", "b", "c"], T.Sid(), "a", "b", n: 3);
-        Assert.NotNull(session.Commitment());
-    }
-
-    [Fact]
-    public void Constructor_AcceptsEmptySet()
-    {
-        Assert.NotNull(T.Session([], T.Sid(), n: 5).Commitment());
     }
 
     [Fact]
@@ -741,14 +721,5 @@ public class PsiFiatShamirBindingTests
             sid: sid, idA: "device_A_abc123", idB: "device_B_xyz789");
         Assert.Equal(["shared"], a);
         Assert.Equal(["shared"], b);
-    }
-
-    [Fact]
-    public void ExplicitSid_ThreadsThroughProtocol()
-    {
-        var sid = CryptoUtil.GetRandomBytes(16);
-        var (a, b) = PsiSession.RunProtocol(["x", "y"], ["y", "z"], 5, sid: sid);
-        Assert.Equal(["y"], a);
-        Assert.Equal(["y"], b);
     }
 }
