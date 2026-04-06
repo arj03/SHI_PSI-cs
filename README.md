@@ -37,6 +37,7 @@ This protocol builds on established techniques from the PSI literature. The foun
 | `\|D\|` | Size of the element domain (the universe of possible values; may be arbitrarily large) |
 | `a, b ∈ Z_q` | Secret blinding keys chosen uniformly at random by Party A and Party B |
 | `Com(x; r)` | A Pedersen commitment to value x with randomness r |
+| `π_A, π_B` | A zero-knowledge proof of discrete log equality (Chaum-Pedersen proof) for Party A and party B |
 | `sid` | Unique session identifier for a protocol execution (random 128-bit nonce) |
 | `id_A, id_B` | Stable identifiers for Party A and Party B |
 
@@ -140,13 +141,13 @@ sequenceDiagram
     Note over A,B: Phase 2 - Double-Blinding
     A->>B: T_A, r_A
     Note over B: Verify Com(T_A, r_A) = C_A
-    Note over B: Compute U_AB = b*T_A, generate proof pi_B
-    B->>A: T_B, r_B, U_AB, pi_B
+    Note over B: Compute U_AB = b*T_A, generate proof π_B
+    B->>A: T_B, r_B, U_AB, π_B
     Note over A: Verify Com(T_B, r_B) = C_B
-    Note over A: Verify pi_B over (T_A, U_AB)
-    Note over A: Compute U_BA = a*T_B, generate proof pi_A
-    A->>B: U_BA, pi_A
-    Note over B: Verify pi_A over (T_B, U_BA)
+    Note over A: Verify π_B over (T_A, U_AB)
+    Note over A: Compute U_BA = a*T_B, generate proof π_A
+    A->>B: U_BA, π_A
+    Note over B: Verify π_A over (T_B, U_BA)
 
     Note over A,B: Phase 3 - Intersection Computation
     Note over A: Match U_AB and U_BA to recover S_A ∩ S_B
