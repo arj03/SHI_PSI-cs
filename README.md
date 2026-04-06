@@ -37,10 +37,8 @@ This protocol builds on established techniques from the PSI literature. The foun
 | `\|D\|` | Size of the element domain (the universe of possible values; may be arbitrarily large) |
 | `a, b ∈ Z_q` | Secret blinding keys chosen uniformly at random by Party A and Party B |
 | `Com(x; r)` | A Pedersen commitment to value x with randomness r |
-| `π_DL` | A zero-knowledge proof of discrete log equality (Chaum-Pedersen proof) |
 | `sid` | Unique session identifier for a protocol execution (random 128-bit nonce) |
 | `id_A, id_B` | Stable identifiers for Party A and Party B |
-| `λ` | Security parameter (e.g. 128 bits) |
 
 ---
 
@@ -327,7 +325,7 @@ This repo contains a proof of concept implementation in 550 total lines, 410 lin
 
 ### 7.2 Security Considerations for implementers
 
-- - All scalar multiplications must be constant-time to prevent timing side-channel attacks.
+- All scalar multiplications must be constant-time to prevent timing side-channel attacks.
 - Random number generation must use a cryptographically secure PRNG (e.g., /dev/urandom, getrandom(), or equivalent).
 - The hash-to-curve function must be implemented correctly per RFC 9380. An incorrect implementation can leak information about inputs.
 - Dummy elements must be generated from a domain provably disjoint from the real element domain D. A simple approach: prepend a fixed tag byte (e.g., 0xFF) to random bytes, while all real elements are prepended with 0x00.
