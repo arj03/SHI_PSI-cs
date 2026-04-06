@@ -255,9 +255,10 @@ Both parties now independently compute the intersection.
 
 With Ristretto255 (32-byte points) and the batched Chaum-Pedersen proof, the total communication per party is approximately:
 
-    Total ≈ 4 × N × 32 + 64 bytes
+    Per party ≈ 2 × N × 32 + 128 bytes
+    Total     ≈ 4 × N × 32 + 256 bytes
 
-where the 64-byte term is the batched CP proof (one 32-byte scalar challenge + one 32-byte scalar response). For N = 10, this is approximately 1.3 KB per party, or 2.6 KB total.
+The 128-byte per-party overhead is: one commitment (32 bytes) + one commitment nonce (32 bytes) + one batched CP proof (64 bytes: one scalar challenge + one scalar response). For N = 10, this is approximately 0.75 KB per party, or 1.5 KB total.
 
 ---
 
@@ -322,7 +323,7 @@ Capping N alone is insufficient if the protocol can be executed without restrict
 
 ### 7.1 Proof of concept
 
-This repo contains a proof of concept implementation in 550 total lines, 410 lines of code. It can run both sides of the protocol in ~20ms for N=10 and ~200ms for N=500.
+This repo contains a proof of concept implementation in 553 total lines, 410 lines of code. It can run both sides of the protocol in ~20ms for N=10 and ~200ms for N=500.
 
 ### 7.2 Security Considerations for implementers
 
