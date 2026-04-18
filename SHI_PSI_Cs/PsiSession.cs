@@ -1,5 +1,8 @@
 // PsiSession.cs — SHI-PSI protocol state machine and message types
 
+using System.Security.Cryptography;
+using System.Text;
+
 namespace ShiPsiCs;
 
 // ================================================================
@@ -20,7 +23,13 @@ public record ProcessResponseResult(
 public class PsiSession
 {
     public const int DefaultN = 10;
-    private const string DummyTag = "DUMMY_";
+
+    // Byte-level domain separation between real elements and padding, per
+    // README § 7.2: real elements are hashed with a leading 0x00 tag, padding
+    // elements with a leading 0xFF tag. No real UTF-8 string ever hashes into
+    // the padding namespace, so the two domains are provably disjoint.
+    private const byte RealTag = 0x00;
+    private const byte PadTag  = 0xFF;
 
     private readonly int _n;
     private readonly byte[] _key;
@@ -46,6 +55,8 @@ public class PsiSession
             throw new ArgumentException("Party ID (myId) must be non-empty");
         if (string.IsNullOrEmpty(theirId))
             throw new ArgumentException("Party ID (theirId) must be non-empty");
+        if (n < 1)
+            throw new ArgumentException($"N must be at least 1, got {n}");
 
         // Deduplicate: the protocol operates on sets, not multisets.
         var distinct = myElements.Distinct().ToArray();
@@ -58,24 +69,40 @@ public class PsiSession
         _theirId = theirId;
         _key     = Ristretto255.RandomScalar();
 
-        // Phase 0: pad, blind, shuffle
-        var padded = new string[n];
-        for (int i = 0; i < distinct.Length; i++)
-            padded[i] = distinct[i];
-        for (int i = distinct.Length; i < n; i++)
-            padded[i] = DummyTag + Convert.ToHexString(CryptoUtil.GetRandomBytes(16));
-
+        // Phase 0: hash (real vs padding tagged), blind, shuffle. Real elements
+        // occupy positions [0, distinct.Length); padding fills the rest. Only
+        // real positions are recorded in _myBlindedMap, so Intersection() can
+        // distinguish them by map lookup alone — no string-prefix check needed.
         var blindedList = new byte[n][];
+        int realCount = distinct.Length;
         Parallel.For(0, n, i =>
         {
-            blindedList[i] = Ristretto255.ScalarMul(Ristretto255.HashToPoint(padded[i]), _key);
+            var h = i < realCount ? HashRealElement(distinct[i]) : HashPadElement();
+            blindedList[i] = Ristretto255.ScalarMul(h, _key);
         });
-        for (int i = 0; i < n; i++)
-            _myBlindedMap[Ristretto255.PointToHex(blindedList[i])] = padded[i];
+        for (int i = 0; i < realCount; i++)
+            _myBlindedMap[Ristretto255.PointToHex(blindedList[i])] = distinct[i];
         _blindedPoints = CryptoUtil.SecureShuffle(blindedList);
 
         _commitNonce  = Ristretto255.RandomScalar();
         _myCommitment = CryptoUtil.Commit(_blindedPoints, _commitNonce);
+    }
+
+    private static byte[] HashRealElement(string element)
+    {
+        var elemBytes = Encoding.UTF8.GetBytes(element);
+        var input = new byte[1 + elemBytes.Length];
+        input[0] = RealTag;
+        elemBytes.CopyTo(input, 1);
+        return Ristretto255.HashToPoint(input);
+    }
+
+    private static byte[] HashPadElement()
+    {
+        Span<byte> input = stackalloc byte[1 + 32];
+        input[0] = PadTag;
+        RandomNumberGenerator.Fill(input[1..]);
+        return Ristretto255.HashToPoint(input);
     }
 
     // ── Commitment exchange ──────────────────────────────────────
@@ -185,7 +212,7 @@ public class PsiSession
             if (!theirSet.Contains(dbHex)) continue;
 
             var bpHex = Ristretto255.PointToHex(_blindedPoints[i]);
-            if (_myBlindedMap.TryGetValue(bpHex, out var element) && !element.StartsWith(DummyTag))
+            if (_myBlindedMap.TryGetValue(bpHex, out var element))
                 result.Add(element);
         }
         return result.ToArray();

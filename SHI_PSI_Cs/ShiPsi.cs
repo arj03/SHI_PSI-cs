@@ -70,6 +70,15 @@ public static partial class Ristretto255
         return p;
     }
 
+    public static byte[] HashToPoint(ReadOnlySpan<byte> data)
+    {
+        Span<byte> h = stackalloc byte[64];
+        SHA512.HashData(data, h);
+        var p = new byte[PointBytes];
+        crypto_core_ristretto255_from_hash(p, h);
+        return p;
+    }
+
     // ── Scalar arithmetic ────────────────────────────────────────
 
     public static byte[] ScalarReduce64(byte[] s64)
