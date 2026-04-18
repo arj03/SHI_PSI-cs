@@ -11,14 +11,14 @@ internal static class T
     internal static byte[] Sid() => CryptoUtil.GetRandomBytes(16);
 
     internal static PsiSession Session(string[] elements, byte[] sid, int n = 10) =>
-        new(elements, sid, "alice", "bob", n);
+        new(elements, sid, "alice", "bob", PartyRole.Initiator, n);
 
     internal static (PsiSession Alice, PsiSession Bob) Pair(
         string[] setA, string[] setB, byte[]? sid = null, int n = 10)
     {
         var s = sid ?? Sid();
-        return (new PsiSession(setA, s, "alice", "bob", n),
-                new PsiSession(setB, s, "bob", "alice", n));
+        return (new PsiSession(setA, s, "alice", "bob", PartyRole.Initiator, n),
+                new PsiSession(setB, s, "bob", "alice", PartyRole.Responder, n));
     }
 
     internal static FiatShamirContext ProofCtx() =>
@@ -368,8 +368,8 @@ public class PsiProtocolStepByStepTests
     public void FullProtocol_StepByStep()
     {
         var sid = T.Sid();
-        var alice = new PsiSession(["apple", "banana"], sid, "alice", "bob", 5);
-        var bob = new PsiSession(["banana", "cherry"], sid, "bob", "alice", 5);
+        var alice = new PsiSession(["apple", "banana"], sid, "alice", "bob", PartyRole.Initiator, 5);
+        var bob = new PsiSession(["banana", "cherry"], sid, "bob", "alice", PartyRole.Responder, 5);
 
         alice.ReceiveCommitment(bob.Commitment());
         bob.ReceiveCommitment(alice.Commitment());
@@ -478,6 +478,132 @@ public class PsiSessionEdgeCaseTests
 
         Assert.False(Ristretto255.PointEquals(s1.Commitment(), s2.Commitment()));
     }
+
+    [Fact]
+    public void N_Zero_RejectedAtConstruction()
+    {
+        var ex = Assert.Throws<ArgumentException>(
+            () => new PsiSession([], T.Sid(), "alice", "bob", PartyRole.Initiator, 0));
+        Assert.Contains("N must be at least 1", ex.Message);
+    }
+}
+
+// ================================================================
+// 5b. Role / phase state-machine tests
+// ================================================================
+
+public class PsiRolePhaseTests
+{
+    [Fact]
+    public void Initiator_CannotCall_ProcessBlindedSet()
+    {
+        var (alice, bob) = T.Pair(["a"], ["a"], n: 5);
+        alice.ReceiveCommitment(bob.Commitment());
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => alice.ProcessBlindedSet(bob.BlindedSet()));
+        Assert.Contains("Responder", ex.Message);
+    }
+
+    [Fact]
+    public void Responder_CannotCall_ProcessResponse()
+    {
+        var (alice, bob) = T.Pair(["a"], ["a"], n: 5);
+        alice.ReceiveCommitment(bob.Commitment());
+        bob.ReceiveCommitment(alice.Commitment());
+        var bobResponse = bob.ProcessBlindedSet(alice.BlindedSet());
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => bob.ProcessResponse(bobResponse));
+        Assert.Contains("Initiator", ex.Message);
+    }
+
+    [Fact]
+    public void Initiator_CannotCall_ProcessFinal()
+    {
+        var (alice, bob) = T.Pair(["a"], ["a"], n: 5);
+        alice.ReceiveCommitment(bob.Commitment());
+        bob.ReceiveCommitment(alice.Commitment());
+        var aliceFinal = alice.ProcessResponse(bob.ProcessBlindedSet(alice.BlindedSet()));
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => alice.ProcessFinal(aliceFinal));
+        Assert.Contains("Responder", ex.Message);
+    }
+
+    [Fact]
+    public void ProcessBlindedSet_BeforeReceivingCommitment_Fails()
+    {
+        var (alice, bob) = T.Pair(["a"], ["a"], n: 5);
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => bob.ProcessBlindedSet(alice.BlindedSet()));
+        Assert.Contains("CommitmentReceived", ex.Message);
+    }
+
+    [Fact]
+    public void ReceiveCommitment_Twice_Fails()
+    {
+        var (alice, bob) = T.Pair(["a"], ["a"], n: 5);
+        alice.ReceiveCommitment(bob.Commitment());
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => alice.ReceiveCommitment(bob.Commitment()));
+        Assert.Contains("Created", ex.Message);
+    }
+
+    [Fact]
+    public void ProcessFinal_BeforeProcessBlindedSet_Fails()
+    {
+        var (alice, bob) = T.Pair(["a"], ["a"], n: 5);
+        alice.ReceiveCommitment(bob.Commitment());
+        bob.ReceiveCommitment(alice.Commitment());
+        var aliceFinal = alice.ProcessResponse(bob.ProcessBlindedSet(alice.BlindedSet()));
+
+        // Construct a second responder that never called ProcessBlindedSet.
+        var fresh = new PsiSession(["a"], T.Sid(), "bob", "alice", PartyRole.Responder, 5);
+        fresh.ReceiveCommitment(alice.Commitment());
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => fresh.ProcessFinal(aliceFinal));
+        Assert.Contains("BlindedSetProcessed", ex.Message);
+    }
+
+    [Fact]
+    public void Phase_Advances_Through_HappyPath()
+    {
+        var (alice, bob) = T.Pair(["a"], ["a"], n: 5);
+        Assert.Equal(ProtocolPhase.Created, alice.Phase);
+        Assert.Equal(ProtocolPhase.Created, bob.Phase);
+
+        alice.ReceiveCommitment(bob.Commitment());
+        bob.ReceiveCommitment(alice.Commitment());
+        Assert.Equal(ProtocolPhase.CommitmentReceived, alice.Phase);
+        Assert.Equal(ProtocolPhase.CommitmentReceived, bob.Phase);
+
+        var bobResp = bob.ProcessBlindedSet(alice.BlindedSet());
+        Assert.Equal(ProtocolPhase.BlindedSetProcessed, bob.Phase);
+
+        var aliceFinal = alice.ProcessResponse(bobResp);
+        Assert.Equal(ProtocolPhase.Complete, alice.Phase);
+
+        bob.ProcessFinal(aliceFinal);
+        Assert.Equal(ProtocolPhase.Complete, bob.Phase);
+    }
+
+    [Fact]
+    public void Phase_NotAdvancedOnVerificationFailure()
+    {
+        var (alice, bob) = T.Pair(["a"], ["a"], n: 5);
+        alice.ReceiveCommitment(bob.Commitment());
+        bob.ReceiveCommitment(alice.Commitment());
+
+        var bs = alice.BlindedSet();
+        var tamperedPoints = (byte[][])bs.Points.Clone();
+        tamperedPoints[0] = Ristretto255.HashToPoint("injected");
+
+        Assert.Throws<InvalidOperationException>(
+            () => bob.ProcessBlindedSet(new BlindedSetMsg(tamperedPoints, bs.Nonce)));
+        // Phase must not have advanced.
+        Assert.Equal(ProtocolPhase.CommitmentReceived, bob.Phase);
+    }
 }
 
 // ================================================================
@@ -490,8 +616,8 @@ public class PsiProtocolSecurityTests
     public void TamperedCommitment_IsRejected()
     {
         var sid = T.Sid();
-        var alice = new PsiSession(["a"], sid, "alice", "bob", 5);
-        var bob = new PsiSession(["a"], sid, "bob", "alice", 5);
+        var alice = new PsiSession(["a"], sid, "alice", "bob", PartyRole.Initiator, 5);
+        var bob = new PsiSession(["a"], sid, "bob", "alice", PartyRole.Responder, 5);
 
         alice.ReceiveCommitment(Ristretto255.HashToPoint("fake")); // wrong commitment
         bob.ReceiveCommitment(alice.Commitment());
@@ -580,8 +706,8 @@ public class PsiProtocolSecurityTests
     public void MismatchedN_BetweenParties_Fails()
     {
         var sid = T.Sid();
-        var alice = new PsiSession(["a"], sid, "alice", "bob", 5);
-        var bob = new PsiSession(["a"], sid, "bob", "alice", 10);
+        var alice = new PsiSession(["a"], sid, "alice", "bob", PartyRole.Initiator, 5);
+        var bob = new PsiSession(["a"], sid, "bob", "alice", PartyRole.Responder, 10);
 
         alice.ReceiveCommitment(bob.Commitment());
         bob.ReceiveCommitment(alice.Commitment());
@@ -609,15 +735,15 @@ public class PsiProtocolSecurityTests
     public void SwappedProof_BetweenSessions_IsRejected()
     {
         var sid1 = T.Sid();
-        var alice = new PsiSession(["x", "y"], sid1, "alice", "bob", 5);
-        var bob = new PsiSession(["x", "z"], sid1, "bob", "alice", 5);
+        var alice = new PsiSession(["x", "y"], sid1, "alice", "bob", PartyRole.Initiator, 5);
+        var bob = new PsiSession(["x", "z"], sid1, "bob", "alice", PartyRole.Responder, 5);
         alice.ReceiveCommitment(bob.Commitment());
         bob.ReceiveCommitment(alice.Commitment());
         var bobResponse = bob.ProcessBlindedSet(alice.BlindedSet());
 
         var sid2 = T.Sid();
-        var eve = new PsiSession(["a"], sid2, "eve", "frank", 5);
-        var frank = new PsiSession(["a"], sid2, "frank", "eve", 5);
+        var eve = new PsiSession(["a"], sid2, "eve", "frank", PartyRole.Initiator, 5);
+        var frank = new PsiSession(["a"], sid2, "frank", "eve", PartyRole.Responder, 5);
         eve.ReceiveCommitment(frank.Commitment());
         frank.ReceiveCommitment(eve.Commitment());
         var frankResponse = frank.ProcessBlindedSet(eve.BlindedSet());
@@ -657,8 +783,8 @@ public class PsiSizeHidingTests
     public void Response_HasFixedPointCount()
     {
         var sid = T.Sid();
-        var alice = new PsiSession(["a"], sid, "alice", "bob", 10);
-        var bob = new PsiSession(["a", "b", "c", "d", "e"], sid, "bob", "alice", 10);
+        var alice = new PsiSession(["a"], sid, "alice", "bob", PartyRole.Initiator, 10);
+        var bob = new PsiSession(["a", "b", "c", "d", "e"], sid, "bob", "alice", PartyRole.Responder, 10);
 
         alice.ReceiveCommitment(bob.Commitment());
         bob.ReceiveCommitment(alice.Commitment());
@@ -679,15 +805,15 @@ public class PsiFiatShamirBindingTests
     public void CrossSessionReplay_IsRejected()
     {
         var sid1 = T.Sid();
-        var alice1 = new PsiSession(["a"], sid1, "alice", "bob", 5);
-        var bob1 = new PsiSession(["a"], sid1, "bob", "alice", 5);
+        var alice1 = new PsiSession(["a"], sid1, "alice", "bob", PartyRole.Initiator, 5);
+        var bob1 = new PsiSession(["a"], sid1, "bob", "alice", PartyRole.Responder, 5);
         alice1.ReceiveCommitment(bob1.Commitment());
         bob1.ReceiveCommitment(alice1.Commitment());
         var bob1Response = bob1.ProcessBlindedSet(alice1.BlindedSet());
 
         var sid2 = T.Sid();
-        var alice2 = new PsiSession(["a"], sid2, "alice", "bob", 5);
-        var bob2 = new PsiSession(["a"], sid2, "bob", "alice", 5);
+        var alice2 = new PsiSession(["a"], sid2, "alice", "bob", PartyRole.Initiator, 5);
+        var bob2 = new PsiSession(["a"], sid2, "bob", "alice", PartyRole.Responder, 5);
         alice2.ReceiveCommitment(bob2.Commitment());
         bob2.ReceiveCommitment(alice2.Commitment());
 
@@ -699,8 +825,8 @@ public class PsiFiatShamirBindingTests
     public void CrossPartyReplay_IsRejected()
     {
         var sid = T.Sid();
-        var alice = new PsiSession(["a"], sid, "alice", "bob", 5);
-        var bob = new PsiSession(["a"], sid, "bob", "alice", 5);
+        var alice = new PsiSession(["a"], sid, "alice", "bob", PartyRole.Initiator, 5);
+        var bob = new PsiSession(["a"], sid, "bob", "alice", PartyRole.Responder, 5);
         alice.ReceiveCommitment(bob.Commitment());
         bob.ReceiveCommitment(alice.Commitment());
 

@@ -6,6 +6,20 @@ using System.Text;
 namespace ShiPsiCs;
 
 // ================================================================
+// Role and phase enums — enforce the protocol state machine
+// ================================================================
+
+public enum PartyRole { Initiator, Responder }
+
+public enum ProtocolPhase
+{
+    Created,               // pre-commitment-exchange
+    CommitmentReceived,    // after ReceiveCommitment
+    BlindedSetProcessed,   // Responder only, after ProcessBlindedSet
+    Complete,              // intersection is now computable
+}
+
+// ================================================================
 // Protocol messages
 // ================================================================
 
@@ -47,7 +61,10 @@ public class PsiSession
     private byte[][]? _myDoubleBlinded;
     private byte[][]? _theirDoubleBlinded;
 
-    public PsiSession(string[] myElements, byte[] sid, string myId, string theirId, int n = DefaultN)
+    public PartyRole Role { get; }
+    public ProtocolPhase Phase { get; private set; } = ProtocolPhase.Created;
+
+    public PsiSession(string[] myElements, byte[] sid, string myId, string theirId, PartyRole role, int n = DefaultN)
     {
         if (sid == null || sid.Length == 0)
             throw new ArgumentException("Session ID (sid) must be non-empty");
@@ -67,6 +84,7 @@ public class PsiSession
         _sid     = sid;
         _myId    = myId;
         _theirId = theirId;
+        Role     = role;
         _key     = Ristretto255.RandomScalar();
 
         // Phase 0: hash (real vs padding tagged), blind, shuffle. Real elements
@@ -105,12 +123,32 @@ public class PsiSession
         return Ristretto255.HashToPoint(input);
     }
 
+    // ── Role/phase gating ────────────────────────────────────────
+
+    private void RequireRole(PartyRole required, string method)
+    {
+        if (Role != required)
+            throw new InvalidOperationException(
+                $"{method} may only be called by the {required}; this session is the {Role}");
+    }
+
+    private void RequirePhase(ProtocolPhase required, string method)
+    {
+        if (Phase != required)
+            throw new InvalidOperationException(
+                $"{method} requires phase {required}, but session is in {Phase}");
+    }
+
     // ── Commitment exchange ──────────────────────────────────────
 
     public byte[] Commitment() => _myCommitment;
 
-    public void ReceiveCommitment(byte[] commitment) =>
+    public void ReceiveCommitment(byte[] commitment)
+    {
+        RequirePhase(ProtocolPhase.Created, nameof(ReceiveCommitment));
         _theirCommitment = commitment;
+        Phase = ProtocolPhase.CommitmentReceived;
+    }
 
     // ── Blinded set exchange ─────────────────────────────────────
 
@@ -120,12 +158,9 @@ public class PsiSession
 
     private void VerifyCommitment(byte[][] points, byte[] nonce)
     {
-        if (_theirCommitment == null)
-            throw new InvalidOperationException(
-                "ReceiveCommitment must be called before processing messages");
         if (points.Length != _n)
             throw new InvalidOperationException($"Expected {_n} points, got {points.Length}");
-        if (!CryptoUtil.VerifyCommit(points, nonce, _theirCommitment))
+        if (!CryptoUtil.VerifyCommit(points, nonce, _theirCommitment!))
             throw new InvalidOperationException("Commitment verification failed");
     }
 
@@ -165,10 +200,13 @@ public class PsiSession
 
     public ProcessBlindedSetResponse ProcessBlindedSet(BlindedSetMsg msg)
     {
+        RequireRole(PartyRole.Responder, nameof(ProcessBlindedSet));
+        RequirePhase(ProtocolPhase.CommitmentReceived, nameof(ProcessBlindedSet));
         VerifyCommitment(msg.Points, msg.Nonce);
 
         var (doubled, proof) = DoubleBlindAndProve(msg.Points);
         _theirDoubleBlinded = doubled;
+        Phase = ProtocolPhase.BlindedSetProcessed;
 
         return new ProcessBlindedSetResponse(
             doubled, proof, _blindedPoints, _commitNonce);
@@ -176,39 +214,43 @@ public class PsiSession
 
     public ProcessResponseResult ProcessResponse(ProcessBlindedSetResponse msg)
     {
+        RequireRole(PartyRole.Initiator, nameof(ProcessResponse));
+        RequirePhase(ProtocolPhase.CommitmentReceived, nameof(ProcessResponse));
         VerifyCommitment(msg.MyPoints, msg.MyNonce);
-
         VerifyProof(msg.DoubleBlinded, msg.Proof);
 
         _myDoubleBlinded = msg.DoubleBlinded;
 
         var (doubled, proof) = DoubleBlindAndProve(msg.MyPoints);
         _theirDoubleBlinded = doubled;
+        Phase = ProtocolPhase.Complete;
 
         return new ProcessResponseResult(doubled, proof);
     }
 
     public void ProcessFinal(ProcessResponseResult msg)
     {
+        RequireRole(PartyRole.Responder, nameof(ProcessFinal));
+        RequirePhase(ProtocolPhase.BlindedSetProcessed, nameof(ProcessFinal));
         VerifyProof(msg.DoubleBlinded, msg.Proof);
         _myDoubleBlinded = msg.DoubleBlinded;
+        Phase = ProtocolPhase.Complete;
     }
 
     // ── Intersection computation ─────────────────────────────────
 
     public string[] Intersection()
     {
-        if (_myDoubleBlinded == null || _theirDoubleBlinded == null)
-            throw new InvalidOperationException("Protocol not complete");
+        RequirePhase(ProtocolPhase.Complete, nameof(Intersection));
 
         var theirSet = new HashSet<string>(_n);
-        for (int i = 0; i < _theirDoubleBlinded.Length; i++)
+        for (int i = 0; i < _theirDoubleBlinded!.Length; i++)
             theirSet.Add(Ristretto255.PointToHex(_theirDoubleBlinded[i]));
 
         var result = new List<string>();
         for (int i = 0; i < _blindedPoints.Length; i++)
         {
-            var dbHex = Ristretto255.PointToHex(_myDoubleBlinded[i]);
+            var dbHex = Ristretto255.PointToHex(_myDoubleBlinded![i]);
             if (!theirSet.Contains(dbHex)) continue;
 
             var bpHex = Ristretto255.PointToHex(_blindedPoints[i]);
@@ -225,8 +267,8 @@ public class PsiSession
         byte[]? sid = null, string idA = "party_a", string idB = "party_b")
     {
         var sessionSid = sid ?? CryptoUtil.GetRandomBytes(16);
-        var alice = new PsiSession(setA, sessionSid, idA, idB, n);
-        var bob   = new PsiSession(setB, sessionSid, idB, idA, n);
+        var alice = new PsiSession(setA, sessionSid, idA, idB, PartyRole.Initiator, n);
+        var bob   = new PsiSession(setB, sessionSid, idB, idA, PartyRole.Responder, n);
 
         alice.ReceiveCommitment(bob.Commitment());
         bob.ReceiveCommitment(alice.Commitment());
