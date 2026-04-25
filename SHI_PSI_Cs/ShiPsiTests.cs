@@ -23,8 +23,8 @@ internal static class T
 
     internal static FiatShamirContext ProofCtx() =>
         new(Sid(), "prover", "verifier",
-            Ristretto255.HashToPoint("commit_a"),
-            Ristretto255.HashToPoint("commit_b"));
+            Ristretto255.HashToPoint("test", "commit_a"),
+            Ristretto255.HashToPoint("test", "commit_b"));
 }
 
 // ================================================================
@@ -38,7 +38,7 @@ public class CryptoUtilTests
     {
         var elements = new byte[3][];
         for (int i = 0; i < 3; i++)
-            elements[i] = Ristretto255.HashToPoint($"elem_{i}");
+            elements[i] = Ristretto255.HashToPoint("test",$"elem_{i}");
         var nonce = Ristretto255.RandomScalar();
 
         var commitment = CryptoUtil.Commit(elements, nonce);
@@ -49,7 +49,7 @@ public class CryptoUtilTests
     [Fact]
     public void VerifyCommit_RejectsWrongNonce()
     {
-        var elements = new byte[][] { Ristretto255.HashToPoint("x") };
+        var elements = new byte[][] { Ristretto255.HashToPoint("test","x") };
         var nonce1 = Ristretto255.RandomScalar();
         var nonce2 = Ristretto255.RandomScalar();
 
@@ -61,8 +61,8 @@ public class CryptoUtilTests
     [Fact]
     public void VerifyCommit_RejectsWrongElements()
     {
-        var elements1 = new byte[][] { Ristretto255.HashToPoint("real") };
-        var elements2 = new byte[][] { Ristretto255.HashToPoint("fake") };
+        var elements1 = new byte[][] { Ristretto255.HashToPoint("test","real") };
+        var elements2 = new byte[][] { Ristretto255.HashToPoint("test","fake") };
         var nonce = Ristretto255.RandomScalar();
 
         var commitment = CryptoUtil.Commit(elements1, nonce);
@@ -75,14 +75,14 @@ public class CryptoUtilTests
     {
         var elements1 = new byte[][]
         {
-            Ristretto255.HashToPoint("a"),
-            Ristretto255.HashToPoint("b"),
+            Ristretto255.HashToPoint("test","a"),
+            Ristretto255.HashToPoint("test","b"),
         };
         var elements2 = new byte[][]
         {
-            Ristretto255.HashToPoint("a"),
-            Ristretto255.HashToPoint("b"),
-            Ristretto255.HashToPoint("c"),
+            Ristretto255.HashToPoint("test","a"),
+            Ristretto255.HashToPoint("test","b"),
+            Ristretto255.HashToPoint("test","c"),
         };
         var nonce = Ristretto255.RandomScalar();
 
@@ -94,8 +94,8 @@ public class CryptoUtilTests
     [Fact]
     public void Commit_DifferentOrderProducesSameCommitment()
     {
-        var a = Ristretto255.HashToPoint("order_a");
-        var b = Ristretto255.HashToPoint("order_b");
+        var a = Ristretto255.HashToPoint("test","order_a");
+        var b = Ristretto255.HashToPoint("test","order_b");
         var nonce = Ristretto255.RandomScalar();
 
         var c1 = CryptoUtil.Commit(new[] { a, b }, nonce);
@@ -120,7 +120,7 @@ public class ChaumPedersenTests
         var outputs = new byte[5][];
         for (int i = 0; i < 5; i++)
         {
-            inputs[i] = Ristretto255.HashToPoint($"cp_input_{i}");
+            inputs[i] = Ristretto255.HashToPoint("test",$"cp_input_{i}");
             outputs[i] = Ristretto255.ScalarMul(inputs[i], k);
         }
 
@@ -138,7 +138,7 @@ public class ChaumPedersenTests
         var outputs = new byte[3][];
         for (int i = 0; i < 3; i++)
         {
-            inputs[i] = Ristretto255.HashToPoint($"wrong_key_{i}");
+            inputs[i] = Ristretto255.HashToPoint("test",$"wrong_key_{i}");
             outputs[i] = Ristretto255.ScalarMul(inputs[i], k);
         }
 
@@ -155,14 +155,14 @@ public class ChaumPedersenTests
         var outputs = new byte[4][];
         for (int i = 0; i < 4; i++)
         {
-            inputs[i] = Ristretto255.HashToPoint($"tamper_{i}");
+            inputs[i] = Ristretto255.HashToPoint("test",$"tamper_{i}");
             outputs[i] = Ristretto255.ScalarMul(inputs[i], k);
         }
 
         var proof = ChaumPedersen.Prove(inputs, outputs, k, ctx);
 
         var tampered = (byte[][])outputs.Clone();
-        tampered[1] = Ristretto255.HashToPoint("injected_point");
+        tampered[1] = Ristretto255.HashToPoint("test","injected_point");
 
         Assert.False(ChaumPedersen.Verify(inputs, tampered, proof, ctx));
     }
@@ -176,7 +176,7 @@ public class ChaumPedersenTests
         var outputs = new byte[3][];
         for (int i = 0; i < 3; i++)
         {
-            inputs[i] = Ristretto255.HashToPoint($"swap_{i}");
+            inputs[i] = Ristretto255.HashToPoint("test",$"swap_{i}");
             outputs[i] = Ristretto255.ScalarMul(inputs[i], k);
         }
 
@@ -193,7 +193,7 @@ public class ChaumPedersenTests
     {
         var k = Ristretto255.RandomScalar();
         var ctx = T.ProofCtx();
-        var inputs = new[] { Ristretto255.HashToPoint("single") };
+        var inputs = new[] { Ristretto255.HashToPoint("test","single") };
         var outputs = new[] { Ristretto255.ScalarMul(inputs[0], k) };
 
         var proof = ChaumPedersen.Prove(inputs, outputs, k, ctx);
@@ -210,7 +210,7 @@ public class ChaumPedersenTests
         var outputs = new byte[n][];
         for (int i = 0; i < n; i++)
         {
-            inputs[i] = Ristretto255.HashToPoint($"large_{i}");
+            inputs[i] = Ristretto255.HashToPoint("test",$"large_{i}");
             outputs[i] = Ristretto255.ScalarMul(inputs[i], k);
         }
 
@@ -228,7 +228,7 @@ public class ChaumPedersenTests
         var outputs = new byte[4][];
         for (int i = 0; i < 4; i++)
         {
-            inputs[i] = Ristretto255.HashToPoint($"mixed_{i}");
+            inputs[i] = Ristretto255.HashToPoint("test",$"mixed_{i}");
             outputs[i] = Ristretto255.ScalarMul(inputs[i], i < 2 ? k1 : k2);
         }
 
@@ -241,7 +241,7 @@ public class ChaumPedersenTests
     {
         var k = Ristretto255.RandomScalar();
         var ctx = T.ProofCtx();
-        var inputs = new[] { Ristretto255.HashToPoint("nonnull") };
+        var inputs = new[] { Ristretto255.HashToPoint("test","nonnull") };
         var outputs = new[] { Ristretto255.ScalarMul(inputs[0], k) };
 
         var proof = ChaumPedersen.Prove(inputs, outputs, k, ctx);
@@ -256,11 +256,11 @@ public class ChaumPedersenTests
     public void Verify_RejectsDifferentSid()
     {
         var k = Ristretto255.RandomScalar();
-        var inputs = new[] { Ristretto255.HashToPoint("sid_test") };
+        var inputs = new[] { Ristretto255.HashToPoint("test","sid_test") };
         var outputs = new[] { Ristretto255.ScalarMul(inputs[0], k) };
 
-        var ca = Ristretto255.HashToPoint("ca");
-        var cb = Ristretto255.HashToPoint("cb");
+        var ca = Ristretto255.HashToPoint("test","ca");
+        var cb = Ristretto255.HashToPoint("test","cb");
         var ctx1 = new FiatShamirContext(T.Sid(), "prover", "verifier", ca, cb);
         var ctx2 = new FiatShamirContext(T.Sid(), "prover", "verifier", ca, cb);
 
@@ -272,12 +272,12 @@ public class ChaumPedersenTests
     public void Verify_RejectsSwappedProverVerifier()
     {
         var k = Ristretto255.RandomScalar();
-        var inputs = new[] { Ristretto255.HashToPoint("role_test") };
+        var inputs = new[] { Ristretto255.HashToPoint("test","role_test") };
         var outputs = new[] { Ristretto255.ScalarMul(inputs[0], k) };
 
         var sid = T.Sid();
-        var ca = Ristretto255.HashToPoint("ca");
-        var cb = Ristretto255.HashToPoint("cb");
+        var ca = Ristretto255.HashToPoint("test","ca");
+        var cb = Ristretto255.HashToPoint("test","cb");
         var proveCtx = new FiatShamirContext(sid, "alice", "bob", ca, cb);
         var wrongCtx = new FiatShamirContext(sid, "bob", "alice", ca, cb);
 
@@ -291,14 +291,14 @@ public class ChaumPedersenTests
     public void Verify_RejectsDifferentCommitments()
     {
         var k = Ristretto255.RandomScalar();
-        var inputs = new[] { Ristretto255.HashToPoint("commit_test") };
+        var inputs = new[] { Ristretto255.HashToPoint("test","commit_test") };
         var outputs = new[] { Ristretto255.ScalarMul(inputs[0], k) };
 
         var sid = T.Sid();
         var ctx1 = new FiatShamirContext(sid, "p", "v",
-            Ristretto255.HashToPoint("ca"), Ristretto255.HashToPoint("cb"));
+            Ristretto255.HashToPoint("test","ca"), Ristretto255.HashToPoint("test","cb"));
         var ctx2 = new FiatShamirContext(sid, "p", "v",
-            Ristretto255.HashToPoint("ca"), Ristretto255.HashToPoint("DIFFERENT"));
+            Ristretto255.HashToPoint("test","ca"), Ristretto255.HashToPoint("test","DIFFERENT"));
 
         var proof = ChaumPedersen.Prove(inputs, outputs, k, ctx1);
         Assert.False(ChaumPedersen.Verify(inputs, outputs, proof, ctx2));
@@ -355,6 +355,41 @@ public class PsiProtocolCorrectnessTests
         var (a, b) = PsiSession.RunProtocol([element], [element], 5);
         Assert.Equal([element], a);
         Assert.Equal([element], b);
+    }
+
+    [Fact]
+    public void BothSetsEmpty_ProducesEmptyIntersection()
+    {
+        var (a, b) = PsiSession.RunProtocol([], [], 5);
+        Assert.Empty(a);
+        Assert.Empty(b);
+    }
+
+    [Fact]
+    public void OneSetEmpty_ProducesEmptyIntersection()
+    {
+        var (a, b) = PsiSession.RunProtocol([], ["x", "y"], 5);
+        Assert.Empty(a);
+        Assert.Empty(b);
+    }
+
+    [Fact]
+    public void FullOverlap_ReturnsAllElements()
+    {
+        var elements = new[] { "alpha", "beta", "gamma", "delta" };
+        var (a, b) = PsiSession.RunProtocol(elements, elements, 10);
+        Assert.Equal(elements.OrderBy(x => x), a.OrderBy(x => x));
+        Assert.Equal(elements.OrderBy(x => x), b.OrderBy(x => x));
+    }
+
+    [Fact]
+    public void DuplicateInputs_AreSilentlyDeduplicated()
+    {
+        // Spec is set-based; duplicates in the input array should not cause
+        // failures or produce duplicate matches.
+        var (a, b) = PsiSession.RunProtocol(["x", "x", "y"], ["x", "y", "y", "z"], 10);
+        Assert.Equal(new[] { "x", "y" }, a.OrderBy(s => s));
+        Assert.Equal(new[] { "x", "y" }, b.OrderBy(s => s));
     }
 }
 
@@ -597,7 +632,7 @@ public class PsiRolePhaseTests
 
         var bs = alice.BlindedSet();
         var tamperedPoints = (byte[][])bs.Points.Clone();
-        tamperedPoints[0] = Ristretto255.HashToPoint("injected");
+        tamperedPoints[0] = Ristretto255.HashToPoint("test","injected");
 
         Assert.Throws<InvalidOperationException>(
             () => bob.ProcessBlindedSet(new BlindedSetMsg(tamperedPoints, bs.Nonce)));
@@ -619,7 +654,7 @@ public class PsiProtocolSecurityTests
         var alice = new PsiSession(["a"], sid, "alice", "bob", PartyRole.Initiator, 5);
         var bob = new PsiSession(["a"], sid, "bob", "alice", PartyRole.Responder, 5);
 
-        alice.ReceiveCommitment(Ristretto255.HashToPoint("fake")); // wrong commitment
+        alice.ReceiveCommitment(Ristretto255.HashToPoint("test","fake")); // wrong commitment
         bob.ReceiveCommitment(alice.Commitment());
 
         var ex = Assert.Throws<InvalidOperationException>(
@@ -636,7 +671,7 @@ public class PsiProtocolSecurityTests
 
         var bs = alice.BlindedSet();
         var tamperedPoints = (byte[][])bs.Points.Clone();
-        tamperedPoints[0] = Ristretto255.HashToPoint("injected");
+        tamperedPoints[0] = Ristretto255.HashToPoint("test","injected");
 
         var ex = Assert.Throws<InvalidOperationException>(
             () => bob.ProcessBlindedSet(new BlindedSetMsg(tamperedPoints, bs.Nonce)));
@@ -652,7 +687,7 @@ public class PsiProtocolSecurityTests
 
         var bobResponse = bob.ProcessBlindedSet(alice.BlindedSet());
         var tamperedDb = (byte[][])bobResponse.DoubleBlinded.Clone();
-        tamperedDb[0] = Ristretto255.HashToPoint("tampered");
+        tamperedDb[0] = Ristretto255.HashToPoint("test","tampered");
 
         var ex = Assert.Throws<InvalidOperationException>(
             () => alice.ProcessResponse(bobResponse with { DoubleBlinded = tamperedDb }));
@@ -668,7 +703,7 @@ public class PsiProtocolSecurityTests
 
         var aliceFinal = alice.ProcessResponse(bob.ProcessBlindedSet(alice.BlindedSet()));
         var tamperedDb = (byte[][])aliceFinal.DoubleBlinded.Clone();
-        tamperedDb[0] = Ristretto255.HashToPoint("evil");
+        tamperedDb[0] = Ristretto255.HashToPoint("test","evil");
 
         var ex = Assert.Throws<InvalidOperationException>(
             () => bob.ProcessFinal(aliceFinal with { DoubleBlinded = tamperedDb }));
@@ -686,7 +721,7 @@ public class PsiProtocolSecurityTests
         var ex = Assert.Throws<InvalidOperationException>(
             () => alice.ProcessResponse(
                 bobResponse with { DoubleBlinded = bobResponse.DoubleBlinded.Take(3).ToArray() }));
-        Assert.Contains("Expected 5 double-blinded", ex.Message);
+        Assert.Contains("expected 5 points, got 3", ex.Message);
     }
 
     [Fact]
@@ -699,7 +734,7 @@ public class PsiProtocolSecurityTests
         var bs = alice.BlindedSet();
         var ex = Assert.Throws<InvalidOperationException>(
             () => bob.ProcessBlindedSet(new BlindedSetMsg(bs.Points.Take(3).ToArray(), bs.Nonce)));
-        Assert.Contains("Expected 5 points, got 3", ex.Message);
+        Assert.Contains("expected 5 points, got 3", ex.Message);
     }
 
     [Fact]
@@ -725,7 +760,7 @@ public class PsiProtocolSecurityTests
 
         var bs = alice.BlindedSet();
         var fakePoints = Enumerable.Range(0, 5)
-            .Select(i => Ristretto255.HashToPoint($"fake_{i}")).ToArray();
+            .Select(i => Ristretto255.HashToPoint("test",$"fake_{i}")).ToArray();
 
         Assert.Throws<InvalidOperationException>(
             () => bob.ProcessBlindedSet(new BlindedSetMsg(fakePoints, bs.Nonce)));

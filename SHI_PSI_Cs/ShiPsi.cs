@@ -61,23 +61,37 @@ public static partial class Ristretto255
         return r;
     }
 
-    public static byte[] HashToPoint(string element)
+    /// <summary>
+    /// Hash-to-curve with explicit domain separation. Hashes
+    /// SHA-512(len(dst) || dst || len(payload) || payload) and feeds the
+    /// 64-byte digest to libsodium's Ristretto255 from_hash. Length-prefixing
+    /// both fields makes the dst/payload split unambiguous, so distinct
+    /// (dst, payload) pairs cannot collide.
+    /// </summary>
+    public static byte[] HashToPoint(string dst, ReadOnlySpan<byte> payload)
     {
+        var dstBytes = Encoding.UTF8.GetBytes(dst);
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA512);
+        Span<byte> len = stackalloc byte[4];
+
+        BinaryPrimitives.WriteUInt32LittleEndian(len, (uint)dstBytes.Length);
+        hasher.AppendData(len);
+        hasher.AppendData(dstBytes);
+
+        BinaryPrimitives.WriteUInt32LittleEndian(len, (uint)payload.Length);
+        hasher.AppendData(len);
+        hasher.AppendData(payload);
+
         Span<byte> h = stackalloc byte[64];
-        SHA512.HashData(Encoding.UTF8.GetBytes("h2c|" + element), h);
+        hasher.GetHashAndReset(h);
+
         var p = new byte[PointBytes];
         crypto_core_ristretto255_from_hash(p, h);
         return p;
     }
 
-    public static byte[] HashToPoint(ReadOnlySpan<byte> data)
-    {
-        Span<byte> h = stackalloc byte[64];
-        SHA512.HashData(data, h);
-        var p = new byte[PointBytes];
-        crypto_core_ristretto255_from_hash(p, h);
-        return p;
-    }
+    public static byte[] HashToPoint(string dst, string payload) =>
+        HashToPoint(dst, Encoding.UTF8.GetBytes(payload));
 
     // ── Scalar arithmetic ────────────────────────────────────────
 
@@ -120,8 +134,7 @@ public static partial class Ristretto255
     public static bool PointEquals(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b) =>
         a.Length == b.Length && CryptographicOperations.FixedTimeEquals(a, b);
 
-    public static string PointToHex(byte[] p) =>
-        Convert.ToHexString(p).ToLowerInvariant();
+    public static string PointToHex(byte[] p) => Convert.ToHexString(p);
 
     public static byte[] HexToPoint(string hex) =>
         Convert.FromHexString(hex);
@@ -177,8 +190,43 @@ public sealed class Transcript : IDisposable
 // Crypto utilities
 // ================================================================
 
+// ================================================================
+// Byte-array key comparer (for HashSet/Dictionary keyed on points)
+// ================================================================
+
+public sealed class ByteArrayComparer : IEqualityComparer<byte[]>
+{
+    public static readonly ByteArrayComparer Instance = new();
+
+    private ByteArrayComparer() { }
+
+    public bool Equals(byte[]? x, byte[]? y)
+    {
+        if (ReferenceEquals(x, y)) return true;
+        if (x is null || y is null) return false;
+        return x.AsSpan().SequenceEqual(y);
+    }
+
+    public int GetHashCode(byte[] obj)
+    {
+        // Ristretto255 encodings are 32 uniformly-distributed bytes, so any
+        // 4 bytes are a good hash. Fall back to a length-mixed hash for short
+        // inputs we don't expect in practice.
+        if (obj.Length >= 4)
+            return BinaryPrimitives.ReadInt32LittleEndian(obj);
+        return HashCode.Combine(obj.Length);
+    }
+}
+
 public static class CryptoUtil
 {
+    /// <summary>
+    /// Switchover above which Parallel.For becomes worthwhile for the per-element
+    /// EC operations in this protocol (each scalar mult is ~30 µs; thread-pool
+    /// dispatch dominates well below this point).
+    /// </summary>
+    internal const int ParallelThreshold = 64;
+
     public static byte[] GetRandomBytes(int n) => RandomNumberGenerator.GetBytes(n);
 
     public static (byte[] First, byte[] Second) CanonicalOrder(byte[] a, byte[] b)
@@ -194,21 +242,33 @@ public static class CryptoUtil
 
     // ── Pedersen commitment: Com({P_i}; r) = r·H + Σ P_i ────────
 
-    private static readonly byte[] PedersenH = Ristretto255.HashToPoint("pedersen_generator");
+    private static readonly byte[] PedersenH =
+        Ristretto255.HashToPoint("shi_psi:pedersen_generator", ReadOnlySpan<byte>.Empty);
 
     public static byte[] Commit(byte[][] elements, byte[] nonce)
     {
         var rH = Ristretto255.ScalarMul(PedersenH, nonce);
         if (elements.Length == 0) return rH;
 
-        var lockObj = new object();
-        byte[]? sum = null;
-        Parallel.For(0, elements.Length,
-            () => (byte[]?)null,
-            (i, _, local) => local is null ? elements[i] : Ristretto255.PointAdd(local, elements[i]),
-            local => { lock (lockObj) { sum = sum is null ? local! : Ristretto255.PointAdd(sum, local!); } });
+        byte[] sum;
+        if (elements.Length < ParallelThreshold)
+        {
+            sum = elements[0];
+            for (int i = 1; i < elements.Length; i++)
+                sum = Ristretto255.PointAdd(sum, elements[i]);
+        }
+        else
+        {
+            var lockObj = new object();
+            byte[]? psum = null;
+            Parallel.For(0, elements.Length,
+                () => (byte[]?)null,
+                (i, _, local) => local is null ? elements[i] : Ristretto255.PointAdd(local, elements[i]),
+                local => { lock (lockObj) { psum = psum is null ? local! : Ristretto255.PointAdd(psum, local!); } });
+            sum = psum!;
+        }
 
-        return Ristretto255.PointAdd(rH, sum!);
+        return Ristretto255.PointAdd(rH, sum);
     }
 
     public static bool VerifyCommit(byte[][] elements, byte[] nonce, byte[] expected) =>
@@ -216,26 +276,24 @@ public static class CryptoUtil
 
     // ── Fisher-Yates with rejection sampling ─────────────────────
 
-    public static T[] SecureShuffle<T>(T[] arr)
+    public static void SecureShuffle<T>(Span<T> arr)
     {
-        var a = (T[])arr.Clone();
         Span<byte> buf = stackalloc byte[4];
-        for (int i = a.Length - 1; i > 0; i--)
+        for (int i = arr.Length - 1; i > 0; i--)
         {
             uint range = (uint)(i + 1);
             uint limit = uint.MaxValue - (uint.MaxValue % range);
             uint val;
             do
             {
-                    RandomNumberGenerator.Fill(buf);
-                val = BitConverter.ToUInt32(buf);
+                RandomNumberGenerator.Fill(buf);
+                val = BinaryPrimitives.ReadUInt32LittleEndian(buf);
             }
             while (val >= limit);
 
             int j = (int)(val % range);
-            (a[i], a[j]) = (a[j], a[i]);
+            (arr[i], arr[j]) = (arr[j], arr[i]);
         }
-        return a;
     }
 }
 
@@ -252,7 +310,11 @@ public static class ChaumPedersen
         Transcript t, FiatShamirContext ctx, byte[][] inputs, byte[][] outputs)
     {
         t.Append(ctx.Sid).Append(ctx.Commit1).Append(ctx.Commit2);
+        // Bind the array lengths so a (k, n-k) split cannot be re-interpreted
+        // as a (k', n-k') split with the same concatenated body.
+        t.Append(inputs.Length);
         for (int i = 0; i < inputs.Length; i++) t.Append(inputs[i]);
+        t.Append(outputs.Length);
         for (int i = 0; i < outputs.Length; i++) t.Append(outputs[i]);
     }
 
@@ -270,16 +332,26 @@ public static class ChaumPedersen
         }
 
         var weights = new byte[n][];
-        Parallel.For(0, n, i =>
+        if (n < CryptoUtil.ParallelThreshold)
         {
-            using var t = new Transcript();
-            t.Append(seed).Append(i);
-            var w = t.Finalize();
-            if (CryptographicOperations.FixedTimeEquals(w, ScalarZero))
-                w[0] = 1;
-            weights[i] = w;
-        });
+            for (int i = 0; i < n; i++)
+                weights[i] = DeriveWeight(seed, i);
+        }
+        else
+        {
+            Parallel.For(0, n, i => weights[i] = DeriveWeight(seed, i));
+        }
         return weights;
+    }
+
+    private static byte[] DeriveWeight(byte[] seed, int i)
+    {
+        using var t = new Transcript();
+        t.Append(seed).Append(i);
+        var w = t.Finalize();
+        if (CryptographicOperations.FixedTimeEquals(w, ScalarZero))
+            w[0] = 1;
+        return w;
     }
 
     private static (byte[] A, byte[] B) WeightedSums(
@@ -288,6 +360,24 @@ public static class ChaumPedersen
         int n = inputs.Length;
         var As = new byte[n][];
         var Bs = new byte[n][];
+
+        if (n < CryptoUtil.ParallelThreshold)
+        {
+            for (int i = 0; i < n; i++)
+            {
+                As[i] = Ristretto255.ScalarMul(inputs[i], weights[i]);
+                Bs[i] = Ristretto255.ScalarMul(outputs[i], weights[i]);
+            }
+            var sumA = As[0];
+            var sumB = Bs[0];
+            for (int i = 1; i < n; i++)
+            {
+                sumA = Ristretto255.PointAdd(sumA, As[i]);
+                sumB = Ristretto255.PointAdd(sumB, Bs[i]);
+            }
+            return (sumA, sumB);
+        }
+
         Parallel.For(0, n, i =>
         {
             As[i] = Ristretto255.ScalarMul(inputs[i], weights[i]);
@@ -332,7 +422,14 @@ public static class ChaumPedersen
         var v       = Ristretto255.RandomScalar();
         var R       = Ristretto255.ScalarMul(A, v);
         var c       = ChallengeHash(ctx, A, B, R);
-        var s       = Ristretto255.ScalarSub(v, Ristretto255.ScalarMulScalar(c, k));
+        var ck      = Ristretto255.ScalarMulScalar(c, k);
+        var s       = Ristretto255.ScalarSub(v, ck);
+
+        // Both v and c·k partially reveal the secret k if recovered together
+        // with the public proof (s = v - c·k). Zero them as soon as s is built.
+        CryptographicOperations.ZeroMemory(v);
+        CryptographicOperations.ZeroMemory(ck);
+
         return new CpProof(c, s);
     }
 

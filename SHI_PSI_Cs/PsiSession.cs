@@ -34,23 +34,26 @@ public record ProcessResponseResult(
 // SHI-PSI Session
 // ================================================================
 
-public class PsiSession
+public class PsiSession : IDisposable
 {
     public const int DefaultN = 10;
 
-    // Byte-level domain separation between real elements and padding, per
-    // README § 7.2: real elements are hashed with a leading 0x00 tag, padding
-    // elements with a leading 0xFF tag. No real UTF-8 string ever hashes into
-    // the padding namespace, so the two domains are provably disjoint.
-    private const byte RealTag = 0x00;
-    private const byte PadTag  = 0xFF;
+    // Per README §7.2: real elements are prefixed with 0x00 and padding with
+    // 0xFF inside the hash payload. The two namespaces are provably disjoint
+    // because 0xFF is never a valid leading byte of a UTF-8 string. The
+    // protocol DST passed to HashToPoint provides a second layer of
+    // separation against any other protocol using the same Ristretto255
+    // from_hash construction.
+    private const string ProtocolDst = "shi_psi";
+    private const byte   RealTag     = 0x00;
+    private const byte   PadTag      = 0xFF;
 
     private readonly int _n;
     private readonly byte[] _key;
     private readonly byte[][] _blindedPoints;
     private readonly byte[] _commitNonce;
     private readonly byte[] _myCommitment;
-    private readonly Dictionary<string, string> _myBlindedMap = [];
+    private readonly Dictionary<byte[], string> _myBlindedMap;
 
     // Fiat-Shamir transcript binding (Section 3.4)
     private readonly byte[] _sid;
@@ -60,10 +63,20 @@ public class PsiSession
     private byte[]? _theirCommitment;
     private byte[][]? _myDoubleBlinded;
     private byte[][]? _theirDoubleBlinded;
+    private bool _disposed;
 
     public PartyRole Role { get; }
     public ProtocolPhase Phase { get; private set; } = ProtocolPhase.Created;
 
+    /// <summary>
+    /// Build a SHI-PSI session.
+    /// </summary>
+    /// <param name="myElements">
+    /// Real input set. The protocol operates on sets, so duplicates in this
+    /// array are silently dropped before padding (a protocol with two copies
+    /// of the same secret cannot reveal anything more than a protocol with
+    /// one). After deduplication, the set must contain at most N elements.
+    /// </param>
     public PsiSession(string[] myElements, byte[] sid, string myId, string theirId, PartyRole role, int n = DefaultN)
     {
         if (sid == null || sid.Length == 0)
@@ -81,29 +94,42 @@ public class PsiSession
             throw new ArgumentException($"Set size {distinct.Length} exceeds N={n}");
 
         _n       = n;
-        _sid     = sid;
+        _sid     = (byte[])sid.Clone();
         _myId    = myId;
         _theirId = theirId;
         Role     = role;
         _key     = Ristretto255.RandomScalar();
+        _myBlindedMap = new Dictionary<byte[], string>(distinct.Length, ByteArrayComparer.Instance);
 
         // Phase 0: hash (real vs padding tagged), blind, shuffle. Real elements
         // occupy positions [0, distinct.Length); padding fills the rest. Only
         // real positions are recorded in _myBlindedMap, so Intersection() can
-        // distinguish them by map lookup alone — no string-prefix check needed.
+        // distinguish them by map lookup alone — no domain-tag check needed.
         var blindedList = new byte[n][];
         int realCount = distinct.Length;
-        Parallel.For(0, n, i =>
+        if (n < CryptoUtil.ParallelThreshold)
         {
-            var h = i < realCount ? HashRealElement(distinct[i]) : HashPadElement();
-            blindedList[i] = Ristretto255.ScalarMul(h, _key);
-        });
+            for (int i = 0; i < n; i++)
+                blindedList[i] = BlindOne(i, realCount, distinct);
+        }
+        else
+        {
+            Parallel.For(0, n, i =>
+                blindedList[i] = BlindOne(i, realCount, distinct));
+        }
         for (int i = 0; i < realCount; i++)
-            _myBlindedMap[Ristretto255.PointToHex(blindedList[i])] = distinct[i];
-        _blindedPoints = CryptoUtil.SecureShuffle(blindedList);
+            _myBlindedMap[blindedList[i]] = distinct[i];
+        CryptoUtil.SecureShuffle(blindedList.AsSpan());
+        _blindedPoints = blindedList;
 
         _commitNonce  = Ristretto255.RandomScalar();
         _myCommitment = CryptoUtil.Commit(_blindedPoints, _commitNonce);
+    }
+
+    private byte[] BlindOne(int i, int realCount, string[] distinct)
+    {
+        var h = i < realCount ? HashRealElement(distinct[i]) : HashPadElement();
+        return Ristretto255.ScalarMul(h, _key);
     }
 
     private static byte[] HashRealElement(string element)
@@ -112,7 +138,7 @@ public class PsiSession
         var input = new byte[1 + elemBytes.Length];
         input[0] = RealTag;
         elemBytes.CopyTo(input, 1);
-        return Ristretto255.HashToPoint(input);
+        return Ristretto255.HashToPoint(ProtocolDst, input);
     }
 
     private static byte[] HashPadElement()
@@ -120,7 +146,7 @@ public class PsiSession
         Span<byte> input = stackalloc byte[1 + 32];
         input[0] = PadTag;
         RandomNumberGenerator.Fill(input[1..]);
-        return Ristretto255.HashToPoint(input);
+        return Ristretto255.HashToPoint(ProtocolDst, input);
     }
 
     // ── Role/phase gating ────────────────────────────────────────
@@ -141,25 +167,59 @@ public class PsiSession
 
     // ── Commitment exchange ──────────────────────────────────────
 
-    public byte[] Commitment() => _myCommitment;
+    public byte[] Commitment() => (byte[])_myCommitment.Clone();
 
     public void ReceiveCommitment(byte[] commitment)
     {
+        ArgumentNullException.ThrowIfNull(commitment);
+        if (commitment.Length != Ristretto255.PointBytes)
+            throw new ArgumentException(
+                $"Commitment must be {Ristretto255.PointBytes} bytes, got {commitment.Length}");
         RequirePhase(ProtocolPhase.Created, nameof(ReceiveCommitment));
-        _theirCommitment = commitment;
+        _theirCommitment = (byte[])commitment.Clone();
         Phase = ProtocolPhase.CommitmentReceived;
     }
 
     // ── Blinded set exchange ─────────────────────────────────────
 
-    public BlindedSetMsg BlindedSet() => new(_blindedPoints, _commitNonce);
+    public BlindedSetMsg BlindedSet() => new(ClonePoints(_blindedPoints), (byte[])_commitNonce.Clone());
 
     // ── Core protocol logic ──────────────────────────────────────
 
-    private void VerifyCommitment(byte[][] points, byte[] nonce)
+    private static byte[][] ClonePoints(byte[][] points)
+    {
+        var copy = new byte[points.Length][];
+        for (int i = 0; i < points.Length; i++)
+            copy[i] = (byte[])points[i].Clone();
+        return copy;
+    }
+
+    private void ValidatePoints(byte[][] points, string label)
     {
         if (points.Length != _n)
-            throw new InvalidOperationException($"Expected {_n} points, got {points.Length}");
+            throw new InvalidOperationException(
+                $"{label}: expected {_n} points, got {points.Length}");
+        for (int i = 0; i < points.Length; i++)
+        {
+            if (points[i] is null || points[i].Length != Ristretto255.PointBytes)
+                throw new InvalidOperationException(
+                    $"{label}[{i}]: expected {Ristretto255.PointBytes}-byte point, got " +
+                    (points[i] is null ? "null" : points[i].Length.ToString()));
+        }
+    }
+
+    private static void ValidateScalar(byte[] scalar, string label)
+    {
+        if (scalar is null || scalar.Length != Ristretto255.ScalarBytes)
+            throw new InvalidOperationException(
+                $"{label}: expected {Ristretto255.ScalarBytes}-byte scalar, got " +
+                (scalar is null ? "null" : scalar.Length.ToString()));
+    }
+
+    private void VerifyCommitment(byte[][] points, byte[] nonce)
+    {
+        ValidatePoints(points, "blinded set");
+        ValidateScalar(nonce, "commitment nonce");
         if (!CryptoUtil.VerifyCommit(points, nonce, _theirCommitment!))
             throw new InvalidOperationException("Commitment verification failed");
     }
@@ -180,17 +240,26 @@ public class PsiSession
 
     private void VerifyProof(byte[][] doubleBlinded, CpProof proof)
     {
-        if (doubleBlinded.Length != _n)
-            throw new InvalidOperationException($"Expected {_n} double-blinded points");
-        if (!ChaumPedersen.Verify(_blindedPoints, doubleBlinded, proof, VerifyContext()))
+        ValidatePoints(doubleBlinded, "double-blinded set");
+        ValidateScalar(proof?.C!, "proof.C");
+        ValidateScalar(proof?.S!, "proof.S");
+        if (!ChaumPedersen.Verify(_blindedPoints, doubleBlinded, proof!, VerifyContext()))
             throw new InvalidOperationException("Consistency proof verification failed");
     }
 
     private (byte[][] doubled, CpProof proof) DoubleBlindAndProve(byte[][] theirPoints)
     {
         var doubled = new byte[_n][];
-        Parallel.For(0, _n, i =>
-            doubled[i] = Ristretto255.ScalarMul(theirPoints[i], _key));
+        if (_n < CryptoUtil.ParallelThreshold)
+        {
+            for (int i = 0; i < _n; i++)
+                doubled[i] = Ristretto255.ScalarMul(theirPoints[i], _key);
+        }
+        else
+        {
+            Parallel.For(0, _n, i =>
+                doubled[i] = Ristretto255.ScalarMul(theirPoints[i], _key));
+        }
 
         var proof = ChaumPedersen.Prove(theirPoints, doubled, _key, ProveContext());
         return (doubled, proof);
@@ -243,21 +312,35 @@ public class PsiSession
     {
         RequirePhase(ProtocolPhase.Complete, nameof(Intersection));
 
-        var theirSet = new HashSet<string>(_n);
+        var theirSet = new HashSet<byte[]>(_n, ByteArrayComparer.Instance);
         for (int i = 0; i < _theirDoubleBlinded!.Length; i++)
-            theirSet.Add(Ristretto255.PointToHex(_theirDoubleBlinded[i]));
+            theirSet.Add(_theirDoubleBlinded[i]);
 
         var result = new List<string>();
         for (int i = 0; i < _blindedPoints.Length; i++)
         {
-            var dbHex = Ristretto255.PointToHex(_myDoubleBlinded![i]);
-            if (!theirSet.Contains(dbHex)) continue;
-
-            var bpHex = Ristretto255.PointToHex(_blindedPoints[i]);
-            if (_myBlindedMap.TryGetValue(bpHex, out var element))
+            if (!theirSet.Contains(_myDoubleBlinded![i])) continue;
+            if (_myBlindedMap.TryGetValue(_blindedPoints[i], out var element))
                 result.Add(element);
         }
         return result.ToArray();
+    }
+
+    // ── Disposal ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Zero secret material (key and commitment nonce). Idempotent. After
+    /// disposal the session is no longer usable, but already-returned messages
+    /// (commitment, blinded set, proof) remain valid since they were defensively
+    /// cloned at the public-API boundary.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        CryptographicOperations.ZeroMemory(_key);
+        CryptographicOperations.ZeroMemory(_commitNonce);
+        GC.SuppressFinalize(this);
     }
 
     // ── In-process protocol execution ────────────────────────────
