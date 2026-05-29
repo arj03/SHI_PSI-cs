@@ -102,22 +102,38 @@ where r is a uniformly random scalar. The commitment is computationally binding 
 
 The core zero-knowledge proof used in this protocol demonstrates that a party applied the same secret exponent to every received element. Given input points {P_1, ..., P_N} and output points {Q_1, ..., Q_N}, the prover demonstrates knowledge of a scalar k such that Q_i = k · P_i for all i.
 
-The protocol proceeds as follows (using Fiat-Shamir heuristic for non-interactivity):
+The proof must bind all N instances to a **single** exponent k. It does so by collapsing the N pairs into one pair with a random linear combination and giving a single Chaum-Pedersen (Schnorr) proof over that pair, made non-interactive via Fiat-Shamir. This is the construction implemented in `ChaumPedersen`.
+
+**Step 1 — Derive aggregation weights (prover-independent).** Compute deterministic weights w_1, ..., w_N by Fiat-Shamir over both the inputs and the outputs:
+
+    w_i = Hash("CP_batch_weight" || sid || C_A || C_B || P_1 || Q_1 || ... || P_N || Q_N || i)
+
+The weights **must not be chosen by the prover**: prover-chosen weights would let a cheating prover cancel inconsistencies in the weighted sum.
+
+**Step 2 — Aggregate.** Both parties form the same two points:
+
+    A = Σ w_i · P_i        B = Σ w_i · Q_i
+
+If every Q_i = k · P_i for one k, then B = k · A.
+
+**Step 3 — Prove knowledge of k with B = k · A** (a single Chaum-Pedersen instance):
 
 **Prover** (knows secret k):
 
-1. For each i, choose random v_i, compute R_i = v_i · P_i.
-2. Compute challenge: c = Hash("CP_proof" || sid || id_prover || id_verifier || C_A || C_B || P_1 || Q_1 || R_1 || ... || P_N || Q_N || R_N), where sid is the unique session identifier and C_A, C_B are the commitments from Phase 1. The domain separator "CP_proof" and the session context prevent cross-session and cross-party proof replay.
-3. Compute response: s_i = v_i - c · k (mod q) for each i.
-4. Send π = (c, {s_i}).
+1. Choose a single random v and compute R = v · A.
+2. Compute challenge: c = Hash("CP_proof" || sid || id_prover || id_verifier || C_A || C_B || A || B || R), where sid is the unique session identifier and C_A, C_B are the commitments from Phase 1. The domain separator "CP_proof" and the session context prevent cross-session and cross-party proof replay.
+3. Compute the single response: s = v - c · k (mod q).
+4. Send π = (c, s).
 
 **Verifier:**
 
-1. For each i, compute R'_i = s_i · P_i + c · Q_i.
+1. Recompute the weights, A, and B, then compute R' = s · A + c · B.
 2. Recompute c' using the same context-bound hash as the prover.
 3. Accept if and only if c = c'.
 
-**Batch optimization:** For efficiency, use a single random linear combination. Derive deterministic weights w_1, ..., w_N via Fiat-Shamir: compute w_i = Hash("CP_batch_weight" || sid || C_A || C_B || P_1 || Q_1 || ... || P_N || Q_N || i). The weights must not be chosen by the prover, as prover-chosen weights allow a cheating prover to cancel inconsistencies in the weighted sum. Prove that Σ w_i · Q_i = k · (Σ w_i · P_i). This reduces the proof to a single Chaum-Pedersen instance with soundness error 1/q, which is negligible.
+**Soundness.** An accepting proof shows the prover knows dlog_A(B). If the outputs are consistent this is the true exponent k. If even one pair used a different exponent, the prover would have to compute dlog_A(B) without knowing the discrete logs of the input points (which the honest party's blinding hides) — this reduces to the discrete-log problem, and the proof's residual soundness error is 1/q, negligible for q ≈ 2^252. Because the weights are fixed by Fiat-Shamir before the proof and cannot be chosen by the prover, per-element inconsistencies cannot be cancelled in the aggregate.
+
+> **Implementer warning — do not split the response per element.** A naive variant that commits and responds *per element* — R_i = v_i · P_i with independent responses s_i = v_i − c · k — is **insecure** and proves nothing about consistency. A malicious prover that applied a different exponent k_i to each element (Q_i = k_i · P_i) can simply send s_i = v_i − c · k_i, and every check R'_i = s_i · P_i + c · Q_i = v_i · P_i = R_i still passes; the shared challenge c does not tie the exponents together. Consistency is enforced only by a **single response scalar shared across all instances** — here, by aggregating to (A, B) before the one proof. (Equivalently, one may keep per-element commitments R_i = v · P_i with a single shared v and single response s = v − c · k; the aggregated form above is what this protocol uses.)
 
 ---
 
