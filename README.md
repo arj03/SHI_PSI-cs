@@ -8,14 +8,14 @@
 
 ### 1.1 Purpose
 
-This document specifies a cryptographic protocol for Private Set Intersection (PSI) between two mutually distrusting parties. The protocol allows both parties to learn which elements they share in common, without revealing any information about elements not in the intersection, and without revealing the size of either party's input set.
+This document specifies a cryptographic protocol for Private Set Intersection (PSI) between two mutually distrusting parties. The protocol allows both parties to learn which elements they share in common, without revealing any information about elements not in the intersection, and without revealing the exact size of either party's input set beyond a public upper bound N (see Sections 2.2 and 6.3).
 
 The protocol is designed for the following operational context:
 
 - **Domain size:** The universe of possible element values, may be arbitrarily large. When the domain is small, the reduced enumeration cost creates additional attack surface; the protocol includes specific countermeasures (described in Section 6) to mitigate this.
 - **Set scale:** Each party holds a small number of elements (fewer than 1000) drawn from this domain.
 - **Security model:** Malicious adversaries who may deviate arbitrarily from the protocol.
-- **Privacy goal:** Neither party learns the other party's set size or any elements outside the intersection.
+- **Privacy goal:** Neither party learns the other party's exact set size (beyond the public bound N) or any elements outside the intersection. Sections 2.2 and 6.3 state precisely what this hides and what it does not.
 - **Output:** Mutual. Both parties learn the intersection.
 - **Architecture:** Strictly two-party. No trusted third party or certificate authority is involved at any stage.
 
@@ -60,9 +60,9 @@ We assume the adversary is computationally bounded (probabilistic polynomial tim
 
 **Set privacy.** Neither party learns any element belonging to the other party's set that is not in the intersection. Formally, the view of a corrupt party can be simulated given only the intersection and the public parameters.
 
-**Size hiding.** Neither party learns the cardinality of the other party's input set. All protocol messages are exactly the same size regardless of the actual number of real elements either party holds. This is achieved through deterministic padding to the public maximum N.
+**Size hiding.** No single protocol transcript reveals the *exact* cardinality of the other party's input set: every message contains exactly N group elements regardless of how many real elements a party holds, so the transcripts for any two inputs of size ≤ N are computationally indistinguishable (Section 6.1). Two caveats bound this property. First, it hides size only within the range [0, N] — publishing the parameter N already discloses that each party holds at most N elements. Second, it is a *per-run* property: a malicious party that enumerates the domain across multiple executions eventually recovers the other party's whole set, and therefore its size. Bounding that cross-run leakage is the role of the pad-to cap and rate limiting in Section 6.3, not of size hiding itself.
 
-**Input independence.** The commitment phase ensures that neither party can choose their input set adaptively after observing the other party's protocol messages. Both parties commit to their blinded sets before any blinded elements are exchanged.
+**Input independence.** Both parties commit to their blinded sets before any blinded elements are exchanged, so neither can choose its input adaptively in response to the other's actual elements. This guarantee is computational, not information-theoretic: the commitment fixes only the *sum* of a party's blinded points, so it rests on the hardness of opening that sum to a different but adversarially useful set rather than on the commitment binding the set outright (Section 6.2.1).
 
 **Correctness.** If both parties follow the protocol honestly, both learn exactly S_A ∩ S_B and nothing else. The zero-knowledge proofs ensure that a malicious party cannot cause the honest party to compute an incorrect result (except by choosing a different input set before the protocol begins).
 
@@ -94,7 +94,7 @@ A Pedersen commitment scheme uses two independent generators g and h of the grou
 
     Com({P_i}; r) = r · h + Σ P_i
 
-where r is a uniformly random scalar. The commitment is computationally binding (under the discrete log assumption) and perfectly hiding.
+where r is a uniformly random scalar. The commitment is computationally binding to the *sum* Σ P_i (under the discrete log assumption) and perfectly hiding. It does not bind the individual multiset — distinct multisets sharing that sum open identically — which has consequences for input independence analyzed in Section 6.2.1.
 
 **In practice:** Each party commits to the multiset-hash of their blinded elements. This is computed as the sum of all blinded points plus a randomness term. The commitment is opened by revealing r and the set of points.
 
@@ -304,9 +304,9 @@ The indistinguishability of the simulation relies on DDH: random group elements 
 
 ### 6.2.1 Commitment Binding and Multiset-Hash Collisions
 
-The Pedersen commitment (Section 3.3) binds to the sum of blinded points, not to the individual elements. Two distinct multisets {P_1, ..., P_N} and {P'_1, ..., P'_N} with the same sum Σ P_i = Σ P'_i would produce identical commitments for the same randomness r. A malicious party that finds such a collision could commit to one set and open with another, violating input independence.
+The Pedersen commitment (Section 3.3) binds only to the *sum* of the blinded points, not to the individual elements: any two multisets with the same sum Σ P_i open the same commitment under the same randomness r. For a party choosing arbitrary group elements this is trivial to violate in the abstract — {P, Q} and {P + Δ, Q − Δ} collide for any Δ — so the scheme is **not** a binding commitment to the multiset. Input independence therefore does not follow from multiset binding; it follows from the difficulty of opening the committed sum to a *different and still useful* set, as follows.
 
-Finding a collision requires discovering a non-trivial integer-coefficient relation among the blinded points {a · H(x) : x ∈ D ∪ D'}, which reduces to the discrete logarithm problem in the Ristretto255 group. Even though the domain D is small (|D| ≈ 100), the blinding key a is chosen by the committing party, so the relevant hardness assumption is that no polynomial-time adversary can find a non-trivial kernel element in the group generated by {H(x) : x ∈ D ∪ D'}. Under the discrete log assumption in a prime-order group of order ~2^252, this holds with overwhelming probability: the expected work to find a relation among N ≤ 100 random group elements is O(√q) ≈ 2^126, which exceeds the security parameter.
+Adaptivity is only available to the responder: the initiator opens its blinded set (message 3) having seen nothing but the other commitment, whereas the responder opens its set (message 4) after seeing the initiator's opened T_A. To gain anything, the responder would have to re-open its commitment to a different set of *genuine* blinded elements b · H(y) — for elements y chosen adaptively from T_A — without changing the committed value. Since it may also choose a fresh opening nonce, doing so requires either a sum-collision among the random-oracle outputs {H(y)} (so the points' sum is preserved and the nonce is unchanged) or a discrete log to absorb the difference into the nonce. Both cost ≈ √q ≈ 2^126 in the order-~2^252 Ristretto255 group (a birthday bound on the random-oracle outputs; Pollard rho on the discrete log), exceeding the 128-bit security target. So input independence holds under this discrete-log / random-oracle hardness assumption — even though the domain D is small (|D| ≈ 100) and the commitment does not bind the multiset.
 
 ### 6.3 Enumeration Attack Analysis
 
