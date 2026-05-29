@@ -268,7 +268,7 @@ The 128-byte per-party overhead is: one commitment (32 bytes) + one commitment n
 
 Under the Decisional Diffie-Hellman (DDH) assumption in the Ristretto255 group and modelling H as a random oracle, the protocol securely computes the set intersection functionality against malicious adversaries. Specifically:
 
-**Privacy:** A corrupt Party A (resp. B) learns nothing beyond S_A ∩ S_B and the public parameter N. The simulator extracts the corrupt party's effective input from the commitment and ZK proofs, queries the ideal functionality, and simulates the remaining messages using random group elements for non-intersecting positions.
+**Privacy:** A corrupt Party A (resp. B) learns nothing beyond S_A ∩ S_B and the public parameter N. The simulator extracts the corrupt party's effective input from its random-oracle queries — bound to a single blinding exponent by the consistency proof — queries the ideal functionality, and simulates the remaining messages using random group elements for non-intersecting positions.
 
 **Size hiding:** Since all messages contain exactly N group elements (regardless of the true set sizes), the transcript is computationally indistinguishable for any two input sets of different sizes, as long as both are ≤ N. The dummy elements are indistinguishable from real blinded elements under DDH.
 
@@ -279,7 +279,7 @@ Under the Decisional Diffie-Hellman (DDH) assumption in the Ristretto255 group a
 1. Receive C_A from the adversary.
 2. Send a random commitment C_B (simulated) to the adversary.
 3. Receive (T_A, r_A) from the adversary. Verify the commitment opens correctly.
-4. Extract the adversary's effective input set by using the ZK extractor on the proof of knowledge implicit in the commitment scheme.
+4. Extract the adversary's effective input set from its random-oracle queries together with the consistency proof. Because H is modeled as a random oracle, the adversary can only place an element e into T_A by querying H(e); the simulator records these queries, applies the knowledge extractor for the Chaum-Pedersen proof π_A to recover the blinding exponent a, and then maps each revealed point a · H(e) back to its queried element e. (The Pedersen commitment is not itself an extractable proof of knowledge — it provides input-independence through binding and hiding, not extraction.)
 5. Query the ideal PSI functionality with the extracted set to learn the intersection.
 6. Simulate T_B, U_AB, and the proof π_B. For elements in the intersection, ensure the double-blinded values match. For all other positions, use random group elements.
 7. Receive U_BA and π_A from the adversary (which may be malformed; the simulator verifies and aborts if invalid, matching the honest party's behavior).
