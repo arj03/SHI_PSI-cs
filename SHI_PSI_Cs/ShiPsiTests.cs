@@ -237,6 +237,33 @@ public class ChaumPedersenTests
     }
 
     [Fact]
+    public void Verify_ZeroScalars_FailCleanly_WithoutThrowing()
+    {
+        var k = Ristretto255.RandomScalar();
+        var ctx = T.ProofCtx();
+        var inputs = new[]
+        {
+            Ristretto255.HashToPoint("test","zero_scalar_0"),
+            Ristretto255.HashToPoint("test","zero_scalar_1"),
+        };
+        var outputs = new[]
+        {
+            Ristretto255.ScalarMul(inputs[0], k),
+            Ristretto255.ScalarMul(inputs[1], k),
+        };
+        var zero = new byte[Ristretto255.ScalarBytes];
+
+        // s = 0 makes s·A the identity and c = 0 makes c·B the identity. The
+        // verification equation is still well-defined; these forged proofs must
+        // return false, not throw from the EC layer.
+        Assert.False(ChaumPedersen.Verify(inputs, outputs, new CpProof(zero, zero), ctx));
+        Assert.False(ChaumPedersen.Verify(inputs, outputs,
+            new CpProof((byte[])zero.Clone(), Ristretto255.RandomScalar()), ctx));
+        Assert.False(ChaumPedersen.Verify(inputs, outputs,
+            new CpProof(Ristretto255.RandomScalar(), (byte[])zero.Clone()), ctx));
+    }
+
+    [Fact]
     public void Proof_ContainsNonNullFields()
     {
         var k = Ristretto255.RandomScalar();
@@ -735,6 +762,58 @@ public class PsiProtocolSecurityTests
         var ex = Assert.Throws<InvalidOperationException>(
             () => bob.ProcessBlindedSet(new BlindedSetMsg(bs.Points.Take(3).ToArray(), bs.Nonce)));
         Assert.Contains("expected 5 points, got 3", ex.Message);
+    }
+
+    [Fact]
+    public void IdentityPoint_InBlindedSet_IsRejectedCleanly()
+    {
+        var (alice, bob) = T.Pair(["a"], ["a"], n: 5);
+        alice.ReceiveCommitment(bob.Commitment());
+        bob.ReceiveCommitment(alice.Commitment());
+
+        var bs = alice.BlindedSet();
+        var points = (byte[][])bs.Points.Clone();
+        points[0] = new byte[Ristretto255.PointBytes]; // all-zero = identity encoding
+
+        // Must abort at the validation gate, not throw "scalar multiplication failed"
+        // from inside DoubleBlindAndProve.
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => bob.ProcessBlindedSet(new BlindedSetMsg(points, bs.Nonce)));
+        Assert.Contains("group element", ex.Message);
+        Assert.Equal(ProtocolPhase.CommitmentReceived, bob.Phase);
+    }
+
+    [Fact]
+    public void MalformedPoint_InBlindedSet_IsRejectedCleanly()
+    {
+        var (alice, bob) = T.Pair(["a"], ["a"], n: 5);
+        alice.ReceiveCommitment(bob.Commitment());
+        bob.ReceiveCommitment(alice.Commitment());
+
+        var bs = alice.BlindedSet();
+        var points = (byte[][])bs.Points.Clone();
+        points[0] = Enumerable.Repeat((byte)0xFF, Ristretto255.PointBytes).ToArray(); // non-canonical
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => bob.ProcessBlindedSet(new BlindedSetMsg(points, bs.Nonce)));
+        Assert.Contains("group element", ex.Message);
+    }
+
+    [Fact]
+    public void ZeroNonce_InBlindedSet_FailsAsCommitmentMismatch()
+    {
+        var (alice, bob) = T.Pair(["a"], ["a"], n: 5);
+        alice.ReceiveCommitment(bob.Commitment());
+        bob.ReceiveCommitment(alice.Commitment());
+
+        var bs = alice.BlindedSet();
+        var zeroNonce = new byte[Ristretto255.ScalarBytes];
+
+        // A degenerate (zero) opening nonce makes 0·H = identity; the commitment
+        // simply fails to match rather than crashing the verifier.
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => bob.ProcessBlindedSet(new BlindedSetMsg(bs.Points, zeroNonce)));
+        Assert.Contains("Commitment verification failed", ex.Message);
     }
 
     [Fact]

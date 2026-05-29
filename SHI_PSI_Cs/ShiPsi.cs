@@ -43,6 +43,10 @@ public static partial class Ristretto255
     private static partial void crypto_core_ristretto255_scalar_mul(
         Span<byte> z, ReadOnlySpan<byte> x, ReadOnlySpan<byte> y);
 
+    [LibraryImport("libsodium")]
+    private static partial int crypto_core_ristretto255_is_valid_point(
+        ReadOnlySpan<byte> p);
+
     // ── EC operations ────────────────────────────────────────────
 
     public static byte[] ScalarMul(byte[] point, byte[] scalar)
@@ -50,6 +54,26 @@ public static partial class Ristretto255
         var q = new byte[PointBytes];
         if (crypto_scalarmult_ristretto255(q, scalar, point) != 0)
             throw new InvalidOperationException("Ristretto255 scalar multiplication failed");
+        return q;
+    }
+
+    /// <summary>
+    /// Scalar multiplication that returns the identity element (the all-zero
+    /// encoding) instead of throwing when the product is the identity.
+    /// <paramref name="point"/> must already be a valid group element; only the
+    /// scalar may be degenerate. libsodium's crypto_scalarmult_ristretto255 reports
+    /// an identity product as an error (-1) so callers can reject degenerate DH
+    /// shares, but in commitment and proof recomputation an attacker-supplied
+    /// zero/degenerate scalar legitimately yields the identity and the verification
+    /// equation is still well-defined — such inputs must make the check fail, not
+    /// crash the verifier with an EC-layer exception (which also leaks which step
+    /// failed, contra §7.2).
+    /// </summary>
+    public static byte[] ScalarMulAllowIdentity(byte[] point, byte[] scalar)
+    {
+        var q = new byte[PointBytes];
+        if (crypto_scalarmult_ristretto255(q, scalar, point) != 0)
+            Array.Clear(q); // identity element; -1 only flags that the product is O
         return q;
     }
 
@@ -134,11 +158,30 @@ public static partial class Ristretto255
     public static bool PointEquals(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b) =>
         a.Length == b.Length && CryptographicOperations.FixedTimeEquals(a, b);
 
+    /// <summary>
+    /// True iff <paramref name="p"/> is the canonical encoding of a Ristretto255
+    /// group element other than the identity. libsodium's is_valid_point accepts
+    /// non-canonical rejection and curve membership but treats the identity (the
+    /// all-zero encoding) as valid; the identity is unusable as a protocol point
+    /// (a·O = O makes crypto_scalarmult_ristretto255 fail with -1), so we reject it
+    /// here too. Validating at the message boundary turns a hostile or malformed
+    /// point into a clean protocol abort instead of a late EC-layer exception.
+    /// </summary>
+    public static bool IsValidPoint(ReadOnlySpan<byte> p)
+    {
+        if (p.Length != PointBytes) return false;
+        if (crypto_core_ristretto255_is_valid_point(p) != 1) return false;
+        return !CryptographicOperations.FixedTimeEquals(p, Identity);
+    }
+
     public static string PointToHex(byte[] p) => Convert.ToHexString(p);
 
     public static byte[] HexToPoint(string hex) =>
         Convert.FromHexString(hex);
 
+    // The Ristretto255 identity element encodes as 32 zero bytes. It is a valid
+    // encoding (is_valid_point accepts it) but is rejected as a protocol point.
+    private static readonly byte[] Identity = new byte[PointBytes];
     private static readonly byte[] Zero = new byte[ScalarBytes];
 }
 
@@ -247,7 +290,7 @@ public static class CryptoUtil
 
     public static byte[] Commit(byte[][] elements, byte[] nonce)
     {
-        var rH = Ristretto255.ScalarMul(PedersenH, nonce);
+        var rH = Ristretto255.ScalarMulAllowIdentity(PedersenH, nonce);
         if (elements.Length == 0) return rH;
 
         byte[] sum;
@@ -439,8 +482,8 @@ public static class ChaumPedersen
         var weights = ComputeWeights(inputs, outputs, ctx);
         var (A, B)  = WeightedSums(inputs, outputs, weights);
         var R_prime = Ristretto255.PointAdd(
-                          Ristretto255.ScalarMul(A, proof.S),
-                          Ristretto255.ScalarMul(B, proof.C));
+                          Ristretto255.ScalarMulAllowIdentity(A, proof.S),
+                          Ristretto255.ScalarMulAllowIdentity(B, proof.C));
         var c_prime = ChallengeHash(ctx, A, B, R_prime);
         return Ristretto255.PointEquals(proof.C, c_prime);
     }

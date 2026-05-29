@@ -205,6 +205,12 @@ public class PsiSession : IDisposable
                 throw new InvalidOperationException(
                     $"{label}[{i}]: expected {Ristretto255.PointBytes}-byte point, got " +
                     (points[i] is null ? "null" : points[i].Length.ToString()));
+            // Reject non-canonical, off-curve, and identity encodings up front, so a
+            // hostile point aborts cleanly here instead of throwing later from inside
+            // an EC operation (which would also reveal which step failed).
+            if (!Ristretto255.IsValidPoint(points[i]))
+                throw new InvalidOperationException(
+                    $"{label}[{i}]: not a valid non-identity group element");
         }
     }
 
